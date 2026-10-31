@@ -31,8 +31,9 @@ New:
   three-attempt/5 s bounds. Neither queued commands nor 2xx replies count as successful decoding recovery.
 - `power [status]` — report whether USB was configured at boot, enumeration wait in ms, and BLE TX
   readback. The startup guard waits at most 3 s plus 250 ms settling before RF initialization; a hostless
-  external supply retains the bounded fallback. This guard/command is built but not yet installed on the
-  test handset's board (OTA attempts were interrupted); it is not proof of stable power.
+  external supply retains the bounded fallback. The guard/command is installed on the test board:
+  `Nov  1 2026 06:03:20`, `usb_boot_configured=true,usb_wait_ms=140,ble_tx_dbm=0`. Low-voltage resets still
+  occurred during the update/reboot (`bo:21→22`); configuration success does not prove stable power.
 - `resync` — queue session closure on the RTSP task. iOS may stop mirroring completely; it is not an
   automatic reconnect/keyframe guarantee.
 - `res W H` — AirPlay resolution advertised in `/info` (default 480 1040), stored in NVS; takes effect on the next mirroring session.

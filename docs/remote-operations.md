@@ -269,7 +269,7 @@ The disabled-event/0 dBm build **is installed**: board version `Nov  1 2026 06:0
 `65ae568d612bc5c7f8d8ae3383c64c52242bd99589932872a25c8e20ac92a526`, runtime `enabled=false,ble.tx=0` and no TCP
 7013 listener. That OTA nevertheless raised `bo:19→20`. Subsequent phone RSSI was around -33..-44 dBm.
 
-A further USB startup guard **is built but not installed**: wait up to 3 s for USB configuration, then 250 ms
+A further USB startup guard **was initially built but not installed** (subsequent installation below): wait up to 3 s for USB configuration, then 250 ms
 settling before starting RF, with `power status` diagnostics and a bounded hostless fallback. The core OTA
 receive-gap timeout was raised from 1 to 10 s. Firmware is 1,535,115 bytes, globals 101,316 bytes, SHA256
 `4d51217e24ccfd0073faa53d020bad3eb63eb5760f9c0ffdaf9ba7a4258149e4`. Host sanitizer/wire tests and the full build
@@ -280,6 +280,22 @@ continuous and a direct BLE read confirmed `bo=20`, the old version, and `power 
 radio preference and the OTA window were restored with confirmed `coex balance` / `ota off`. The next step is
 a fresh board power cycle before another update, then mirroring only after deployment is confirmed. The phone
 remains on 1.0.8 with its task stopped. Keyframe/cold recovery and long-term power stability have not passed.
+
+**The USB startup guard is now actually installed.** After the owner power-cycled the board, the old firmware
+reported `bo=21` (previously 20), showing another recorded brownout at startup. The first OTA preparation did
+not obtain a valid credential response, so no upload started. After revalidating the control/OTA channel, the
+next upload returned 0 and the board read back **`Nov  1 2026 06:03:20`**. The deployed binary is the already
+built/tested SHA256 `4d51217e24ccfd0073faa53d020bad3eb63eb5760f9c0ffdaf9ba7a4258149e4`, without code changes.
+`power status` now reports **`usb_boot_configured=true,usb_wait_ms=140,ble_tx_dbm=0`**, establishing that the
+startup guard runs. USB configuration alone does not establish adequate supply voltage/current.
+
+The update/reboot nevertheless raised `bo:21→22` with `rst=brownout`; there is no voltage trace or precise
+reset-stage evidence to identify the electrical cause. A short idle observation (`up≈24→44 s`) kept Wi-Fi/USB
+healthy with no further recorded reset, which is not a loaded or long-term power test. `keyframe` remains
+disabled, radio preference is balance, OTA is off, and code CI `41247671118` succeeded. The phone is still on
+1.0.8 with no task running; Ops is online, but AirPlay is idle and no fresh screenshot is available (409).
+The owner must restart mirroring to continue load/recovery tests. Evidence is in
+`build/event-recovery/startup-installed.json`; neither automatic keyframe recovery nor stable power has passed.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
