@@ -138,15 +138,25 @@ Mirroring → ESP32 Agent. `resync` was observed to stop mirroring without autom
 Build 6 (`bd01471`) removes automatic whole-GOP snapshots from continuous streaming. If video falls behind
 while the actor replies, the agent waits for live video and discards that decision before looking again;
 explicit snapshot mode remains available. The iOS 15 build `41232551721`, iOS build/tests `41232551715`, and
-CI `41232551702` passed; the simulator ran 93 tests with zero failures. Build 6 was signed as 1.0.6, bundle
-build 6, but **has not completed system installation confirmation**. The phone still runs build 5.
+CI `41232551702` passed; the simulator ran 93 tests with zero failures. The first build 6 installation was
+reported failed; an operations reconnect confirmed the phone was still running 1.0.5. A fresh upload/import
+and re-sign with the existing certificate/defaults produced `Signed/ESP32-Agent15-v1.0.6-retry.ipa`
+(SHA256 `727d73506bb6c826ccdaafe7b2f19681aa6de64c1a0f0cbb547bfacf60c4d5c3`). This package **was installed
+and launched**: the phone's authenticated hello reported `1.0.6` at `2026-10-31T19:42:34.767Z`.
+The saved key/configuration survived; its red-image check again returned
+`model=deepseek-flash, image=red, reasoning_chars=0`. The initial installation failure remains unexplained:
+the successful build 5 and initial build 6 have identical provisioning/entitlements, and their code hashes
+and binary-mode CMS signatures verify.
 
 A subsequent build 5 independent task failed: desktop BLE and management were stopped for about 45 s, the
 phone clicked the home screen and opened search, then source lag caused two `snap` timeouts and historical
 replays. It did not open Calendar and was stopped (`running=false`, final step `stopped`). Separately,
 computer-controlled, visually verified AssistiveTouch → 主屏幕 did return home; this is not an independent task.
 During build 6 installation preparation, the board browned out again (`bo=18`, `ap=idle`), leaving no live
-screenshot. Input was refused, and mirroring must be reopened manually before installation and task acceptance.
+screenshot. Input was refused. After mirroring was restored, the installation above succeeded without
+another board reboot (`bo=18`). The computer LAN decoder is live, but the newly installed phone decoder
+still lacks a complete reference chain (`frameLive=false`, `frameAge=-1`). Stream reception is enabled,
+no task is running, and mirroring must be manually stopped and reopened before build 6 task acceptance.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
