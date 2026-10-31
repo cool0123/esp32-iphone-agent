@@ -32,8 +32,14 @@ typedef struct {
 // Advertises over mDNS and starts the RTSP server task. Call once Wi-Fi is up (any mode).
 bool airplay_start(const airplay_cfg *cfg);
 int airplay_state(void);  // AIRPLAY_IDLE / _CONNECTED / _STREAMING
+// Stop advertising before the Wi-Fi interface is torn down, re-advertise after it is back.
+// Freeing mDNS while the interface disappears is what crashed the board, so keep the order.
+void airplay_mdns_stop(void);
+bool airplay_mdns_start_again(void);
 // Display advertised in /info from the next mirroring session on.
 void airplay_set_display(uint16_t width, uint16_t height, uint8_t max_fps);
+// Close the RTSP connections so iOS starts a new mirroring session (and sends a fresh IDR).
+void airplay_drop_sessions(void);
 
 #ifdef __cplusplus
 }

@@ -67,6 +67,7 @@ import UIKit
     var videoSink: AnyCancellable?
     var videoDir: URL?
     private(set) lazy var calibrator = AutoCalibrator(app: self)
+    private(set) lazy var ops = OpsController(app: self)
     let probe = TouchProbe()
     private var lastStatus = ""
     private var lastTick = now()
@@ -158,6 +159,7 @@ import UIKit
         runs.reload()
         handleLaunchArguments()
         publishWidget()
+        if ops.enabled { ops.start() }
     }
 
     /// Every second: metrics; a suspension note; the stream's numbers every 10 s while a run goes.

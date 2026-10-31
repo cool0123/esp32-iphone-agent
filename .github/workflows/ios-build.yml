@@ -1,0 +1,54 @@
+name: iOS build
+
+# Compiles the iPhone app on a GitHub-hosted macOS runner, so no local Mac is needed.
+# Produces an UNSIGNED .ipa artifact: signing/installing still happens on a machine with the
+# phone attached (Sideloadly on Windows, or Xcode on a Mac).
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios/**"
+      - "prompts/**"
+      - ".github/workflows/ios-build.yml"
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | sed -n '/iOS/,$p' | head -20
+          sw_vers
+
+      - name: Build (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/IPhoneAgent.xcodeproj -scheme IPhoneAgent \
+            -sdk iphoneos -configuration Release \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | xcbeautify || exit 1
+
+      - name: Package unsigned IPA
+        run: |
+          APP=build/dd/Build/Products/Release-iphoneos/IPhoneAgent.app
+          test -d "$APP"
+          rm -rf build/Payload build/IPhoneAgent-unsigned.ipa
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          (cd build && zip -qry IPhoneAgent-unsigned.ipa Payload)
+          ls -lh build/IPhoneAgent-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IPhoneAgent-unsigned-ipa
+          path: build/IPhoneAgent-unsigned.ipa
+          if-no-files-found: error

@@ -354,6 +354,12 @@ extension Pointer: Gestures {}
 
     private func perform(_ a: JObject) async throws {
         guard let phone else { throw DeviceError(message: "no phone") }
+        if a["action"]?.str != "wait" {
+            // A model reply only proves that some frame existed earlier. Fetch a fresh frame before
+            // every real gesture so a broken/stale stream can never authorize another blind action.
+            if let feed = screen as? VideoFeed { try await feed.currentFrame(maxAge: 1, wait: 2) }
+            guard screen?.live == true else { throw BlindError() }
+        }
         func p(_ k: String) -> Double { (a[k]?.double ?? 0) / 1000 }
         switch a["action"]?.str {
         case "tap": try await phone.tap(p("x"), p("y"), aim: a["precise"]?.bool ?? false || missed)

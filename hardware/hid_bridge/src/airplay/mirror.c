@@ -26,7 +26,7 @@
 
 static struct {
   volatile bool run, done;
-  volatile int64_t last_data_us;
+  volatile uint32_t last_video_ms;  // successful video AU only; heartbeats are not streaming video
   int64_t accepted_us;
   bool got_codec, logged_no_video;
   mbedtls_aes_context aes;
@@ -76,12 +76,12 @@ static void handle_codec(const uint8_t *p, size_t n) {
 }
 
 static void handle_packet(const uint8_t *hdr, uint8_t *p, size_t n) {
-  m.last_data_us = esp_timer_get_time();
   if (hdr[4] == 0x01) { handle_codec(p, n); return; }
   if (hdr[4] != 0x00 || !n) return;  // 0x02/0x05: heartbeat and streaming reports
   // the keystream continues across packets, as in mirror_buffer_decrypt()
   mbedtls_aes_crypt_ctr(&m.aes, n, &m.off, m.iv, m.stream, p, p);
   if (!avcc_to_annexb(p, n)) { ap_log("mirror: undecodable payload (%u bytes)", (unsigned)n); return; }
+  m.last_video_ms = (uint32_t)now_ms();
   if (ap_cfg.on_au) ap_cfg.on_au(p, n, annexb_has_idr(p, n));
 }
 
@@ -190,7 +190,7 @@ bool ap_mirror_start(const uint8_t aeskey[16], uint64_t stream_id, uint32_t remo
   m.off = 0;
   m.remote_ip = remote_ip;
   m.timing_rport = timing_rport;
-  m.last_data_us = 0;
+  m.last_video_ms = 0;
   m.accepted_us = 0;
   m.got_codec = false;
   m.logged_no_video = false;
@@ -222,5 +222,5 @@ void ap_mirror_stop(void) {
 bool ap_mirror_running(void) { return m.run; }
 
 bool ap_mirror_streaming(void) {
-  return m.run && m.last_data_us && esp_timer_get_time() - m.last_data_us < 3000000;
+  return m.run && m.last_video_ms && (uint32_t)(now_ms() - m.last_video_ms) < 3000;
 }

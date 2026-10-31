@@ -86,3 +86,7 @@ bool ap_mdns_start(void) {
   const kv *r = raop_txt(&n);
   return add_service(raop_name, "_raop", r, n) && ok;
 }
+
+void airplay_mdns_stop(void) { mdns_free(); }
+
+bool airplay_mdns_start_again(void) { return ap_mdns_start(); }

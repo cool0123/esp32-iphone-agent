@@ -1,5 +1,7 @@
 // Board settings in NVS and the Wi-Fi link, see netcfg.h.
 #include "netcfg.h"
+#include "ota_link.h"
+#include "src/airplay/airplay.h"
 #include <WiFi.h>
 #include <Preferences.h>
 #include <esp_mac.h>
@@ -20,6 +22,10 @@
 static Preferences prefs;
 static String apSsid, apPass, staSsid, staPass, mode;  // mode: "ap" | "sta"
 static String pending;
+static uint32_t brownouts;  // persisted: how often the phone's USB power gave out, so a fix can be measured
+static uint16_t mdnsRestarts, mdnsFails;  // surfaced in status: a crash after a switch shows up here
+static uint8_t mdnsRetries;                // a start that failed is retried once the link is up
+static uint32_t mdnsRetryAt;
 static SemaphoreHandle_t pendingLock = xSemaphoreCreateMutex();
 // STA retries back off: a tight reconnect loop starves BLE, which shares the radio.
 static uint32_t retryAt = 0, retryGap = 5000;
@@ -81,6 +87,10 @@ static void startWifi() {
   } else if (mode == "sta") {
     WiFi.mode(WIFI_STA);  // keep modem sleep on: required while BLE shares the radio
     WiFi.setAutoReconnect(false);
+    // The phone powers the board over USB. At the default 20 dBm a flash write plus a TX burst pulls the
+    // rail down and the board reboots with reset reason "brownout" (it killed the first OTA upload), so
+    // station mode runs at 5 dBm, the same level that made hotspot mode stable on phone power.
+    WiFi.setTxPower(WIFI_POWER_5dBm);
     retryGap = 5000;
     retryAt = millis() + retryGap;
     if (staPass.isEmpty()) WiFi.setMinSecurity(WIFI_AUTH_OPEN);  // the core rejects open networks by default
@@ -115,6 +125,8 @@ void net_begin() {
   WiFi.onEvent(logWifi);
 #endif
   prefs.begin("agent", false);
+  brownouts = prefs.getUInt("bo", 0);
+  if (esp_reset_reason() == ESP_RST_BROWNOUT) prefs.putUInt("bo", ++brownouts);
   apSsid = prefs.getString("ap_ssid", "");
   apPass = prefs.getString("ap_pass", "");
   if (apSsid.isEmpty() || apPass.length() < 8) {
@@ -171,12 +183,25 @@ static void retrySta() {
 
 void net_poll() {
   retrySta();
+  // The interface may not exist yet right after a switch: retry advertising a few times, not once.
+  if (mdnsRetries && net_up() && (int32_t)(millis() - mdnsRetryAt) >= 0) {
+    mdnsRetries--;
+    if (airplay_mdns_start_again()) {
+      mdnsRestarts++;
+      mdnsRetries = 0;
+      ota_resume();
+    } else {
+      mdnsFails++;
+      mdnsRetryAt = millis() + 2000;
+    }
+  }
   xSemaphoreTake(pendingLock, portMAX_DELAY);
   String j = pending;
   pending = "";
   xSemaphoreGive(pendingLock);
   if (j.isEmpty()) return;
   String m = jsonStr(j, "mode");
+  const String oldMode = mode, oldSsid = staSsid, oldPass = staPass;
   if (m == "ap" || m == "off") {
     mode = m;
   } else if (m == "sta" && jsonStr(j, "ssid").length()) {
@@ -189,8 +214,20 @@ void net_poll() {
     return;  // malformed write: keep the current link
   }
   prefs.putString("mode", mode);
+  // Only a real change needs new advertising; rewriting the same config used to churn mDNS for nothing.
+  if (mode == oldMode && (mode != "sta" || (staSsid == oldSsid && staPass == oldPass))) return;
+  // Order matters: stop advertising while the interface still exists, switch, then advertise again.
+  // Calling mdns_free() after the interface was torn down crashed the board (reset reason "crash").
+  airplay_mdns_stop();
+  ota_pause();  // the OTA listener is bound to the interface that is about to go away
   startWifi();
+  mdnsRetries = mode == "off" ? 0 : 5;
+  mdnsRetryAt = millis() + 500;
 }
+
+uint16_t net_mdns_restarts() { return mdnsRestarts; }
+uint16_t net_mdns_fails() { return mdnsFails; }
+uint32_t net_brownouts() { return brownouts; }
 
 String net_json() {
   bool sta = mode == "sta";
@@ -205,6 +242,7 @@ const char *net_mode() {
 
 String net_ip() { return mode == "sta" ? WiFi.localIP().toString() : WiFi.softAPIP().toString(); }
 int net_peers() { return mode == "sta" ? WiFi.status() == WL_CONNECTED : WiFi.softAPgetStationNum(); }
+int net_rssi() { return mode == "sta" && WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0; }
 bool net_up() { return mode == "sta" ? WiFi.status() == WL_CONNECTED : true; }
 
 uint16_t cfg_width() { return prefs.getUShort("w", 480); }

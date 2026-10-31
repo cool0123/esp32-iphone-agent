@@ -19,6 +19,9 @@ struct SettingsView: View {
                         row("Board", "cable.connector", .blue,
                             value: board.connected ? board.name : String(localized: "Not connected"))
                     }
+                    NavigationLink { OpsSettingsView(ops: app.ops) } label: {
+                        row("Remote Management", "network", .teal, value: app.ops.enabled ? app.ops.state : nil)
+                    }
                     CalibrationRow(app: app, calibrator: app.calibrator, pointer: app.pointer)
                     Button { UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!) } label: {
                         HStack {

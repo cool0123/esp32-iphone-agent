@@ -35,10 +35,12 @@ When the link drops, the board releases all buttons/keys (same as before).
 ```json
 {"up":123456,"rst":"power-on","heap":81234,"psram":6200000,"usb":"ok|asleep|off",
  "net":"ap|sta|none","ip":"192.168.4.1","sta":1,
- "ap":"idle|connected|streaming","w":480,"h":1040,"kbps":180,"fps":4.8,"idr":2000,"gop":42000,
+ "ap":"idle|connected|streaming","w":480,"h":1040,"kbps":180,"fps":4.8,"idr":2000,"idr_age":500,
+ "gop":42000,"aus":12,"ov":0,"adrop":0,"vwait":0,
  "ble":{"mtu":247,"phy":2,"kbps":350,"drop":0,"rdrop":0,"n":1}}
 ```
-`kbps` = AirPlay video bitrate in, `ble.kbps` = video bytes out over BLE, `idr` = ms between IDRs, `gop` = bytes buffered since last IDR.
+`kbps` = AirPlay video bitrate in, `ble.kbps` = video bytes out over BLE, `idr` = ms between IDRs, `idr_age` = ms since the last IDR, `gop` = bytes buffered since last IDR.
+`aus` = buffered access units, `ov` = GOP overflow count, `adrop` = oversized access units dropped, `vwait` = 1 while snapshots are waiting for an IDR. After a GOP overflow the live stream keeps forwarding P-frames for an already-running decoder; only random-access snapshots wait for the next IDR, and the board does not restart.
 `rst` = reset reason of the current boot (`power-on|brownout|watchdog|crash|software|usb|other`), `up` = ms since boot.
 `ble.drop` = video notifies given up, `ble.rdrop` = replies that never reached a subscribed peer (should stay 0),
 `ble.n` = connected centrals.
@@ -66,7 +68,7 @@ Receiver name `ESP32 Agent`, mirroring only (no audio), H.264 only, resolution/f
 
 ## Deviations (firmware notes)
 - `status`: if the negotiated MTU is too small for the full JSON (MTU-3 < ~255 bytes), the notify carries a
-  reduced object `{"up","rst","usb","net","ap","ble":{"mtu"}}`; a `status` read always returns the last full JSON.
+  reduced object `{"up","rst","usb","net","ap","vwait","ov","ble":{"mtu"}}`; a `status` read always returns the last full JSON.
 - `sta` in `status` = number of stations on the board's hotspot (mode `ap`), or 1/0 = connected (mode `sta`).
 - `net` read in `sta` mode returns the station network's `ssid`/`pass`.
 - `snap` while mirroring has stopped returns the last buffered GOP (check `"ap"` in status); `snap` without

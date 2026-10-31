@@ -16,12 +16,14 @@
 #include "tusb.h"
 #include "ble_link.h"
 #include "netcfg.h"
+#include "ota_link.h"
 #include "video_link.h"
 #include "src/airplay/airplay.h"
 
 const int STEP = 10;      // max pointer delta per report while moving
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
 const int HOME_REPORTS = 50;
+const long MOVE_LIMIT = 4096;  // worst case ~3.3 s, safely below the 8 s watchdog
 #ifndef DEBUG_SERIAL
 #define DEBUG_SERIAL 0  // 1: echo commands and the AirPlay handshake over USB serial
 #endif
@@ -88,7 +90,7 @@ String run(const String &line) {
   String cmd = sp < 0 ? line : line.substring(0, sp);
   String arg = sp < 0 ? "" : line.substring(sp + 1);
   long a = 0, b = 0;
-  sscanf(arg.c_str(), "%ld %ld", &a, &b);
+  int n = sscanf(arg.c_str(), "%ld %ld", &a, &b);
 
   if (cmd == "ping") return "ok";
   if (!usbReady()) return "err phone usb asleep (unlock the phone)";
@@ -96,7 +98,11 @@ String run(const String &line) {
     for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, -127); delay(2); }
     return "ok";
   }
-  if (cmd == "move") { movePaced(a, b); return "ok"; }
+  if (cmd == "move") {
+    if (n != 2 || a < -MOVE_LIMIT || a > MOVE_LIMIT || b < -MOVE_LIMIT || b > MOVE_LIMIT) return "err move range";
+    movePaced(a, b);
+    return "ok";
+  }
   if (cmd == "press") { mouse.press(MOUSE_LEFT); return "ok"; }
   if (cmd == "release") { mouse.release(MOUSE_LEFT); return "ok"; }
   if (cmd == "click") { mouse.press(MOUSE_LEFT); delay(60); mouse.release(MOUSE_LEFT); return "ok"; }
@@ -141,6 +147,10 @@ String board(const String &line, const String &id) {
     return "ok";
   }
   if (cmd == "snap") { video_snap(id); return ""; }  // replies when the GOP is sent
+  if (cmd == "resync") {  // new mirroring session, so a decoder can start from its IDR
+    airplay_drop_sessions();
+    return "ok";
+  }
   if (cmd == "bench") {
     if (n < 1 || a <= 0 || a > 4096) return "err usage: bench KB (1-4096)";
     video_bench(id, a);
@@ -167,26 +177,45 @@ String board(const String &line, const String &id) {
     ble_unpair();
     return "";
   }
+  if (cmd == "ota") {  // per-boot window; the password is only ever sent over BLE
+    if (arg == "off") {
+      ota_enable(false, nullptr, 0);
+      return "ok off";
+    }
+    if (arg.length() && arg != "on") return "err usage: ota on|off";
+    if (!net_up()) return "err ota needs a wifi link";
+    char pass[24];
+    if (!ota_enable(true, pass, sizeof pass)) return "err ota listener failed";
+    return String("ok ") + net_ip() + " 3232 " + pass;
+  }
   return run(line);
 }
 
 String statusJson(bool full) {
   static const char *apStates[] = {"idle", "connected", "streaming"};
   VideoStats v = video_stats();
-  char s[384];
+  char s[512];
   snprintf(s, sizeof s,
-           "{\"up\":%lu,\"rst\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\",\"ip\":\"%s\",\"sta\":%d,"
-           "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"gop\":%lu,"
-           "\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"n\":%d}}",
+           "{\"bv\":\"%s %s\",\"bo\":%lu,\"up\":%lu,\"rst\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\","
+           "\"ip\":\"%s\",\"sta\":%d,"
+           "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"idr_age\":%lu,"
+           "\"gop\":%lu,\"aus\":%d,\"ov\":%lu,\"adrop\":%lu,\"vwait\":%d,\"mdr\":%u,\"mdf\":%u,\"ota\":%d,"
+           "\"rssi\":%d,\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"n\":%d}}",
+           __DATE__, __TIME__, (unsigned long)net_brownouts(),
            millis(), resetReason(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), usbState(), net_mode(), net_ip().c_str(), net_peers(),
            apStates[airplay_state()], cfg_width(), cfg_height(), (unsigned long)v.kbps, v.fps, (unsigned long)v.idr_ms,
-           (unsigned long)v.gop_bytes, ble_mtu(), ble_phy(), (unsigned long)ble_kbps(), (unsigned long)ble_drops(),
-           (unsigned long)ble_reply_drops(), ble_peers());
+           (unsigned long)v.idr_age, (unsigned long)v.gop_bytes, v.gop_frames, (unsigned long)v.overflows,
+           (unsigned long)v.oversize_drops, v.wait_idr, net_mdns_restarts(), net_mdns_fails(), ota_on() ? 1 : 0,
+           net_rssi(),
+           ble_mtu(), ble_phy(),
+           (unsigned long)ble_kbps(), (unsigned long)ble_drops(), (unsigned long)ble_reply_drops(), ble_peers());
   if (full) return s;
   // MTU below ~250 (before the MTU exchange): keep only the fields the app needs to stay alive
-  snprintf(s, sizeof s, "{\"up\":%lu,\"rst\":\"%s\",\"usb\":\"%s\",\"net\":\"%s\",\"ap\":\"%s\",\"ble\":{\"mtu\":%u}}",
-           millis(), resetReason(), usbState(), net_mode(), apStates[airplay_state()], ble_mtu());
+  snprintf(s, sizeof s,
+           "{\"up\":%lu,\"rst\":\"%s\",\"usb\":\"%s\",\"net\":\"%s\",\"ap\":\"%s\",\"vwait\":%d,\"ov\":%lu,\"ble\":{\"mtu\":%u}}",
+           millis(), resetReason(), usbState(), net_mode(), apStates[airplay_state()], v.wait_idr,
+           (unsigned long)v.overflows, ble_mtu());
   return s;
 }
 
@@ -229,6 +258,10 @@ void setup() {
   keyboard.begin();
   consumer.begin();
   USB.productName("HID Bridge");
+  // The core defaults to SELF_POWERED, so the phone was never asked for the current this board draws and
+  // browned it out on every Wi-Fi burst. Declare bus-powered and ask for 500 mA instead.
+  USB.usbAttributes(0x80);
+  USB.usbPower(500);
   USB.begin();
   esp_task_wdt_config_t wdt = {.timeout_ms = WATCHDOG_MS, .idle_core_mask = 0, .trigger_panic = true};
   esp_task_wdt_reconfigure(&wdt);
@@ -238,6 +271,7 @@ void setup() {
   if (!video_begin()) Serial.println("video: no PSRAM for the GOP buffer");
   ble_begin("ESP32 Agent " + board_suffix());
   startAirplay();
+  ota_begin("iphone-agent");  // listener stays off until a peer runs `ota on`
   xTaskCreatePinnedToCore(statusTask, "status", 4096, NULL, 1, NULL, 1);
   Serial.printf("boot %s: free internal heap %u (largest %u), PSRAM %u, reset %s\n", receiverName.c_str(),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -246,15 +280,14 @@ void setup() {
 }
 
 void loop() {
-  static bool linked = false;
   esp_task_wdt_reset();
   net_poll();
-  if (linked && !ble_connected()) {
-    mouse.release(MOUSE_LEFT);  // a gesture cut off mid-way must not leave the button held (long press)
+  ota_poll();
+  if (ble_take_link_drop()) {  // any control peer lost: never leave a gesture held, even with a debug peer up
+    mouse.release(MOUSE_LEFT);
     keyboard.releaseAll();
     video_stream(false);
   }
-  linked = ble_connected();
 
   String line;
   if (Serial.available()) {  // USB serial takes the same `<id> <command>` lines, for debugging from a Mac
@@ -273,10 +306,13 @@ void loop() {
   rest.trim();
 #if DEBUG_SERIAL
   unsigned long started = millis();
+  // `ota on` answers with a one-time password; keep it out of the serial log.
+  bool secret = rest.startsWith("ota on");
 #endif
   String reply = id.toInt() || id == "0" ? board(rest, id) : "err missing request id";
   if (reply.length()) ble_reply(id + " " + reply);
 #if DEBUG_SERIAL
-  Serial.printf("%s -> %s (%lu ms)\n", line.c_str(), reply.c_str(), millis() - started);
+  Serial.printf("%s -> %s (%lu ms)\n", line.c_str(), secret ? "ok (password redacted)" : reply.c_str(),
+                millis() - started);
 #endif
 }

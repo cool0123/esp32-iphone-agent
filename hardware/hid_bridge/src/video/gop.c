@@ -28,14 +28,17 @@ int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t t
   if (idr) {
     restart(g);
     g->wait_idr = false;
-  } else if (g->wait_idr) {
-    return -1;
+    g->stream_only = false;
+  } else if (g->wait_idr && !g->stream_only) {
+    return -1;  // before the first IDR there is nothing a live decoder can continue from
   }
-  if (g->used + len > g->cap || g->n == g->max) {  // GOP too big: drop it and wait for the next IDR
+  if (g->used + len > g->cap || g->n == g->max) {
+    // A fresh decoder needs an IDR, but a running one already has the reference frames. Keep the
+    // live stream moving instead of rebooting the board and losing AirPlay; snapshots still wait.
     restart(g);
     g->wait_idr = true;
+    g->stream_only = true;
     g->overflows++;
-    return -1;
   }
   memcpy(g->arena + g->used, annexb, len);
   g->aus[g->n] = (gop_au){(uint32_t)g->used, (uint32_t)len, ts, idr};

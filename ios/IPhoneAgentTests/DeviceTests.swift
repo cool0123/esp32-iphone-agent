@@ -94,11 +94,15 @@ import XCTest
     }
 
     func testStatusDecoding() throws {
-        let json = #"{"up":123456,"rst":"power-on","heap":81234,"psram":6200000,"usb":"ok","net":"ap","ip":"192.168.4.1","sta":1,"ap":"streaming","w":480,"h":1040,"kbps":180,"fps":4.8,"idr":2000,"gop":42000,"ble":{"mtu":247,"phy":2,"kbps":350,"drop":0}}"#
+        let json = #"{"up":123456,"rst":"power-on","heap":81234,"psram":6200000,"usb":"ok","net":"ap","ip":"192.168.4.1","sta":1,"ap":"streaming","w":480,"h":1040,"kbps":180,"fps":4.8,"idr":2000,"idr_age":500,"gop":42000,"aus":12,"ov":1,"adrop":0,"vwait":0,"ble":{"mtu":247,"phy":2,"kbps":350,"drop":0}}"#
         let s = try XCTUnwrap(BoardStatus.decode(Data(json.utf8)))
         XCTAssertEqual(s.ap, "streaming")
         XCTAssertEqual(s.ble?.mtu, 247)
         XCTAssertEqual(s.fps, 4.8)
+        XCTAssertEqual(s.idrAge, 500)
+        XCTAssertEqual(s.aus, 12)
+        XCTAssertEqual(s.ov, 1)
+        XCTAssertEqual(s.vwait, 0)
     }
 
     func testPointerRehomesEveryTenGestures() async throws {

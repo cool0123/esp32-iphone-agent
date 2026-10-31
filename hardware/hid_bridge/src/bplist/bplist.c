@@ -25,7 +25,7 @@ int bp_open(bp_reader *r, const void *data, size_t len) {
   r->table = be(t + 24, 8);
   if (r->off_size < 1 || r->off_size > 8 || r->ref_size < 1 || r->ref_size > 8) return -1;
   if (r->top >= r->count || r->table < 8 || r->count > len) return -1;
-  if (r->table + r->count * r->off_size > len - 32) return -1;
+  if (r->table > len - 32 || r->count > (len - 32 - r->table) / r->off_size) return -1;
   return (int)r->top;
 }
 
@@ -70,9 +70,9 @@ int bp_type(const bp_reader *r, int ref) {
 // Body of a container with `want` marker, checking that all refs fit in the object area.
 static bool container(const bp_reader *r, int ref, int want, uint64_t *n, size_t *body) {
   size_t pos = obj_at(r, ref);
-  if (!pos || header(r, pos, n, body) != want) return false;
-  uint64_t refs = want == 0xD ? *n * 2 : *n;
-  return *body + refs * r->ref_size <= r->table;
+  if (!pos || header(r, pos, n, body) != want || *body > r->table) return false;
+  uint64_t avail = (r->table - *body) / r->ref_size;
+  return want == 0xD ? *n <= avail / 2 : *n <= avail;
 }
 
 int bp_count(const bp_reader *r, int ref) {
@@ -138,7 +138,7 @@ bool bp_get_real(const bp_reader *r, int ref, double *out) {
 bool bp_get_data(const bp_reader *r, int ref, const uint8_t **out, size_t *len) {
   size_t pos = obj_at(r, ref), body;
   uint64_t n;
-  if (!pos || header(r, pos, &n, &body) != 0x4 || body + n > r->table) return false;
+  if (!pos || header(r, pos, &n, &body) != 0x4 || body > r->table || n > r->table - body) return false;
   *out = r->buf + body;
   *len = (size_t)n;
   return true;
@@ -162,12 +162,12 @@ bool bp_get_string(const bp_reader *r, int ref, char *out, size_t cap) {
   if (!pos || !cap) return false;
   int kind = header(r, pos, &n, &body);
   if (kind == 0x5) {
-    if (body + n > r->table || n >= cap) return false;
+    if (body > r->table || n > r->table - body || n >= cap) return false;
     memcpy(out, r->buf + body, (size_t)n);
     out[n] = 0;
     return true;
   }
-  if (kind != 0x6 || body + n * 2 > r->table) return false;
+  if (kind != 0x6 || body > r->table || n > (r->table - body) / 2) return false;
   for (uint64_t i = 0; i < n; i++) {
     uint32_t c = (uint32_t)be(r->buf + body + i * 2, 2);
     if (c >= 0xD800 && c < 0xDC00 && i + 1 < n) {  // surrogate pair

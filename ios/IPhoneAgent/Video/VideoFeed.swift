@@ -140,9 +140,9 @@ extension ScreenSource {
     /// once with a longer timeout. Returns where the frame came from, for the log.
     @discardableResult
     func currentFrame(maxAge: Double = 1, wait: Double = 3) async throws -> String {
-        if streamOn && mirroring {
+        if streamOn && mirroring && !broken {
             if frame != nil && now() - updated < maxAge { return "live" }
-            if await fresh(since: now() - maxAge, timeout: wait) != nil { return "live (waited)" }
+            if await fresh(since: now() - maxAge, timeout: wait) != nil, !broken { return "live (waited)" }
         }
         do {
             try await snap()
@@ -150,6 +150,7 @@ extension ScreenSource {
             DebugLog.write("snap timed out; retrying once with a longer timeout")
             try await snap(timeout: snapTimeout * 1.5)
         }
+        if broken || frame == nil { throw BlindError() }
         return "snap"
     }
 

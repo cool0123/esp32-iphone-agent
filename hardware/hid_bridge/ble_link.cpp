@@ -48,6 +48,7 @@ static bool statusDirty;
 static std::atomic<int> ctrlPending;  // replies queued or sending + a status waiting; video yields to them
 static volatile int peers[MAX_PEERS] = {-1, -1};
 static volatile bool subscribed[MAX_PEERS][CH_COUNT];
+static std::atomic<bool> linkDropped;
 static uint32_t winStart, winBytes;  // touched by the video task only
 static volatile uint32_t kbps;
 static std::atomic<uint32_t> drops, replyDrops;
@@ -120,6 +121,7 @@ class ServerCb : public NimBLEServerCallbacks {
       for (int c = 0; c < CH_COUNT; c++) subscribed[i][c] = false;
       peers[i] = -1;
     }
+    linkDropped = true;
     BLE_LOG("disconnect conn %u, reason 0x%x\n", ci.getConnHandle(), reason);
     NimBLEDevice::startAdvertising();
   }
@@ -294,6 +296,12 @@ void ble_begin(const String &name) {
 }
 
 bool ble_connected() { return peerCount() > 0; }
+
+bool ble_take_link_drop() {
+  if (!linkDropped.exchange(false)) return false;
+  if (cmdQueue) xQueueReset(cmdQueue);  // never execute a gesture queued by a peer that has already gone away
+  return true;
+}
 
 bool ble_pop_cmd(String &line, uint32_t wait_ms) {
   char buf[CMD_MAX];

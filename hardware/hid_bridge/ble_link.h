@@ -6,6 +6,7 @@
 
 void ble_begin(const String &name);
 bool ble_connected();
+bool ble_take_link_drop();  // any peer dropped; clears stale queued commands
 bool ble_pop_cmd(String &line, uint32_t wait_ms);  // next `cmd` write, oldest first
 void ble_reply(const String &line);                // queued; sent before any further video
 void ble_status(const String &json);               // latest wins; sent before any further video

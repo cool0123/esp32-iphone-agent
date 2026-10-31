@@ -11,9 +11,13 @@ void net_request(const String &json);    // `net` write; applied by net_poll()
 const char *net_mode();                  // "ap" | "sta" | "none" (station not connected)
 String net_ip();
 int net_peers();                         // stations on our SoftAP, or 1 when connected as a station
+int net_rssi();                          // dBm of the router link (0 when not a station)
 bool net_up();                           // has an IP address
 bool net_coex(const String &pref);       // Wi-Fi/BLE radio share: "bt" | "balance" (boot default) | "wifi"
 const char *net_coex_mode();
+uint16_t net_mdns_restarts();  // successful re-advertisements after a mode/SSID change
+u16_t net_mdns_fails();
+uint32_t net_brownouts();  // persisted count of brownout resets (phone USB power gave out)
 
 // AirPlay settings (take effect on the next boot of the receiver)
 uint16_t cfg_width();

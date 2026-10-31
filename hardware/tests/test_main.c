@@ -83,6 +83,45 @@ static void test_bplist_utf16(void) {
   CHECK(bp_get_string(&r, bp_dict_get(&r, top, "name"), s, sizeof s) && !strcmp(s, "H\xE2\x80\x99s"));
 }
 
+// Extended lengths and trailer offsets must not wrap the bounds checks.
+static void oversized_object(uint8_t marker, uint8_t b[51]) {
+  memset(b, 0, 51);
+  memcpy(b, "bplist00", 8);
+  b[8] = marker;
+  b[9] = 0x13;  // 8-byte length
+  memset(b + 10, 0xff, 8);
+  b[18] = 8;
+  b[25] = b[26] = 1;
+  b[34] = 1;
+  b[50] = 18;
+}
+
+static void test_bplist_overflow(void) {
+  uint8_t b[51];
+  oversized_object(0xdf, b);
+  bp_reader r;
+  int top = bp_open(&r, b, sizeof b);
+  CHECK(top == 0 && bp_count(&r, top) == 0 && bp_dict_get(&r, top, "x") < 0);
+  oversized_object(0xaf, b);
+  top = bp_open(&r, b, sizeof b);
+  CHECK(top == 0 && bp_count(&r, top) == 0 && bp_array_get(&r, top, 0) < 0);
+  oversized_object(0x4f, b);
+  top = bp_open(&r, b, sizeof b);
+  const uint8_t *data;
+  size_t len;
+  CHECK(top == 0 && !bp_get_data(&r, top, &data, &len));
+  char s[8];
+  oversized_object(0x5f, b);
+  top = bp_open(&r, b, sizeof b);
+  CHECK(top == 0 && !bp_get_string(&r, top, s, sizeof s));
+  oversized_object(0x6f, b);
+  top = bp_open(&r, b, sizeof b);
+  CHECK(top == 0 && !bp_get_string(&r, top, s, sizeof s));
+  oversized_object(0xdf, b);
+  memset(b + 43, 0xff, 8);  // offset table near UINT64_MAX
+  CHECK(bp_open(&r, b, sizeof b) < 0);
+}
+
 static void test_gop(void) {
   static uint8_t arena[100];
   static gop_au aus[4];
@@ -93,9 +132,10 @@ static void test_gop(void) {
   CHECK(gop_push(&g, au, 30, true, 2) == 0);
   CHECK(gop_push(&g, au, 30, false, 3) == 1);
   CHECK(gop_push(&g, au, 30, false, 4) == 2 && g.used == 90);
-  CHECK(gop_push(&g, au, 30, false, 5) == -1 && g.n == 0 && g.wait_idr && g.overflows == 1);
-  CHECK(gop_push(&g, au, 10, false, 6) == -1);
-  CHECK(gop_push(&g, au, 10, true, 7) == 0 && !g.wait_idr);
+  CHECK(gop_push(&g, au, 30, false, 5) == 0 && g.n == 1 && g.used == 30);
+  CHECK(g.wait_idr && g.stream_only && g.overflows == 1);  // live P-frames continue, snapshots wait
+  CHECK(gop_push(&g, au, 10, false, 6) == 1);
+  CHECK(gop_push(&g, au, 10, true, 7) == 0 && !g.wait_idr && !g.stream_only);
 
   uint8_t idr[] = {0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x65, 9};
   CHECK(annexb_has_idr(idr, sizeof idr));
@@ -148,6 +188,7 @@ static void test_chunker(void) {
 int main(void) {
   test_bplist_roundtrip();
   test_bplist_utf16();
+  test_bplist_overflow();
   test_gop();
   test_chunker();
   printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);

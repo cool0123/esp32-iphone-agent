@@ -26,6 +26,7 @@
 
 airplay_cfg ap_cfg;
 static ap_conn conns[MAX_CONNS];
+static void close_conn(ap_conn *c);
 
 void ap_log(const char *fmt, ...) {
   if (!ap_cfg.log) return;
@@ -53,6 +54,14 @@ int airplay_state(void) {
   for (int i = 0; i < MAX_CONNS; i++)
     if (conns[i].fd >= 0 && (conns[i].have_keymsg || ap_mirror_owner == &conns[i])) return AIRPLAY_CONNECTED;
   return AIRPLAY_IDLE;
+}
+
+void airplay_drop_sessions(void) {
+  // iOS sends one IDR when a mirroring session starts and only P frames afterwards, so a decoder that
+  // starts later has nothing to lock on to. Closing the RTSP connections forces the phone to negotiate
+  // a new session, which begins with a fresh IDR.
+  for (int i = 0; i < MAX_CONNS; i++)
+    if (conns[i].fd >= 0) close_conn(&conns[i]);
 }
 
 static bool send_all(int fd, const void *p, size_t n) {

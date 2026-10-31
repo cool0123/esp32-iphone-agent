@@ -27,7 +27,8 @@ typedef struct {
   uint8_t cfg[GOP_CFG_MAX];  // SPS+PPS, Annex-B
   size_t cfg_len;
   uint32_t cfg_ts;
-  bool wait_idr;    // overflow or start: drop until the next IDR
+  bool wait_idr;    // no random-access GOP: snapshots wait for the next IDR
+  bool stream_only; // after overflow: keep forwarding P-frames for an already-running decoder
   uint32_t gen;     // bumps whenever the buffer restarts
   uint32_t overflows;
 } gop_buf;
