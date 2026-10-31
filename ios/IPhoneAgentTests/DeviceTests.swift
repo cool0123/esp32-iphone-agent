@@ -147,6 +147,43 @@ import XCTest
         XCTAssertNil(feed.frame)
     }
 
+    func testInvalidVideoChainRejectsQueuedFramesUntilACompleteIDR() async {
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device; feed.mirroring = true
+        feed.show(Data([0xff, 0xd8]), width: 320, height: 480)
+        XCTAssertTrue(feed.live)
+        let oldStream = feed.streamID
+        func frame(_ streamID: Int) -> H264Decoder.Frame {
+            .init(jpeg: Data([0xff, 0xd8]), width: 320, height: 480, decodeMs: 0,
+                  unit: .init(data: Data(), idr: false, config: false, snap: false, boardMs: 0), streamID: streamID)
+        }
+        // Contiguous CONFIG then a predictive AU: fresh timestamps alone cannot restore references.
+        feed.receive(Data([0, 0, 11, 0, 0, 0, 0]))
+        feed.receive(Data([1, 0, 3, 0, 0, 0, 0]))
+        feed.publish(frame(oldStream))
+        feed.publish(frame(feed.streamID))
+        XCTAssertFalse(feed.live)
+        XCTAssertNil(feed.frame)
+        feed.receive(Data([2, 0, 7, 0, 0, 0, 0]))  // completed IDR; no fake encoded payload submitted
+        feed.publish(frame(feed.streamID))
+        XCTAssertTrue(feed.live)
+        feed.decodeFailed("bad reference picture", streamID: feed.streamID)
+        feed.publish(frame(feed.streamID))
+        XCTAssertFalse(feed.live)
+        XCTAssertNil(feed.frame)
+        feed.receive(Data([3, 0, 7, 0, 0, 0, 0]))
+        let completedStream = feed.streamID
+        feed.publish(frame(completedStream))
+        XCTAssertTrue(feed.live)
+        feed.receive(Data([5, 0, 3, 0, 0, 0, 0]))  // chunk 4 lost
+        feed.publish(frame(completedStream))
+        XCTAssertFalse(feed.live)
+        XCTAssertNil(feed.frame)
+        feed.linkLost()
+        feed.publish(frame(completedStream))
+        XCTAssertNil(feed.frame)
+    }
+
     func testFreshCalibrationHasNoDriftAndSurvivesARestart() {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         let pointer = Pointer(device: FakeDevice(), calibrationFile: file)

@@ -69,17 +69,30 @@ extension ScreenSource {
 
     private var assembler = VideoAssembler()
     private let decoder = H264Decoder()
+    private(set) var streamID = 0
+    private var waitingForIDR = true
 
     init() {
         decoder.onFrame = { [weak self] f in DispatchQueue.main.async { self?.publish(f) } }
-        decoder.onError = { [weak self] msg in
-            DispatchQueue.main.async {
-                let bg = UIApplication.shared.applicationState == .background
-                self?.note = bg ? "\(msg) [in background]" : msg
-                self?.metrics?.decodeError(background: bg)
-                self?.broken = true
-            }
+        decoder.onError = { [weak self] msg, streamID in
+            DispatchQueue.main.async { self?.decodeFailed(msg, streamID: streamID) }
         }
+    }
+
+    private func invalidateVideo() {
+        streamID += 1
+        waitingForIDR = true
+        broken = true
+        frame = nil; updated = 0; capturedAt = 0
+        decoder.queue.async { [decoder] in decoder.invalidate() }
+    }
+
+    func decodeFailed(_ msg: String, streamID: Int) {
+        guard streamID == self.streamID else { return }
+        let bg = UIApplication.shared.applicationState == .background
+        note = bg ? "\(msg) [in background]" : msg
+        metrics?.decodeError(background: bg)
+        invalidateVideo()
     }
 
     var live: Bool {
@@ -94,17 +107,29 @@ extension ScreenSource {
         metrics?.videoBytes(chunk.count)
         let dropsBefore = assembler.drops
         let unit = assembler.add(chunk)
-        if assembler.drops > dropsBefore { metrics?.videoDrops(assembler.drops - dropsBefore); broken = true }
+        if assembler.drops > dropsBefore {
+            metrics?.videoDrops(assembler.drops - dropsBefore)
+            invalidateVideo()
+            note = "video data lost; waiting for a complete keyframe"
+        }
         guard let unit else { return }
+        if unit.config {
+            invalidateVideo()
+            note = "video restarted; waiting for a complete keyframe"
+        }
+        if unit.idr { waitingForIDR = false }
+        guard unit.config || !waitingForIDR else { return }
         if !unit.snap { boardClock(ms: Int(unit.boardMs)) }  // snap units are resent late: their ages say nothing
         if unit.idr { metrics?.idrSeen() }
-        decoder.queue.async { [decoder] in decoder.decode(unit) }
+        let streamID = streamID
+        decoder.queue.async { [decoder] in decoder.decode(unit, streamID: streamID) }
     }
 
     /// The link (re)connected: chunk numbering starts over.
     func resetStream() {
         assembler.reset(); clockOffset = nil
-        frame = nil; updated = 0; capturedAt = 0; broken = false
+        invalidateVideo()
+        note = "waiting for a complete keyframe"
     }
 
     /// A board timestamp (status `up`, or a streamed unit) just arrived: keep the smallest offset.
@@ -115,15 +140,19 @@ extension ScreenSource {
 
     /// Show a still frame (demo data).
     func show(_ jpeg: Data, width: Int, height: Int) {
+        waitingForIDR = false
         publish(H264Decoder.Frame(jpeg: jpeg, width: width, height: height, decodeMs: 4.2,
-                                  unit: AccessUnit(data: Data(), idr: false, config: false, snap: false, boardMs: 0)))
+                                  unit: AccessUnit(data: Data(), idr: false, config: false, snap: false, boardMs: 0),
+                                  streamID: streamID))
     }
 
-    private func publish(_ f: H264Decoder.Frame) {
+    func publish(_ f: H264Decoder.Frame) {
+        guard f.streamID == streamID, !waitingForIDR else { return }
         frame = f.jpeg
         updated = now()
         capturedAt = clockOffset.map { Double(f.unit.boardMs) / 1000 + $0 } ?? updated
         broken = false
+        note = ""
         if size.width != CGFloat(f.width) || size.height != CGFloat(f.height) {
             size = CGSize(width: f.width, height: f.height)
         }
@@ -220,5 +249,5 @@ extension ScreenSource {
     }
 
     /// The link dropped: the board forgets `stream on`.
-    func linkLost() { streamOn = false; frame = nil; updated = 0; capturedAt = 0 }
+    func linkLost() { streamOn = false; resetStream() }
 }

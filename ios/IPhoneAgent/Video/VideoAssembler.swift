@@ -11,8 +11,8 @@ struct AccessUnit: Equatable {
 
 /// Rebuilds access units from `video` notifies: `[seq u16 LE][flags u8][payload]` (docs/ble-protocol.md).
 ///
-/// A seq gap counts as a drop; everything is then discarded until the next START chunk that is an IDR or
-/// CONFIG, because P-frames after a lost chunk cannot be decoded.
+/// CONFIG may restore parameter sets, but only a complete IDR restores reference pictures.
+/// After a gap, predictive frames remain blocked until that complete IDR arrives.
 struct VideoAssembler {
     struct Flags: OptionSet {
         let rawValue: UInt8
@@ -56,10 +56,13 @@ struct VideoAssembler {
             return nil
         }
         if flags.contains(.start) {
-            let key = flags.contains(.idr) || flags.contains(.config)
-            if waitingForKey && !key { current = nil; return nil }
-            waitingForKey = false
-            guard payload.count >= 4 else { current = nil; return nil }
+            if current != nil { drops += 1; waitingForKey = true }
+            if flags.contains(.config) { waitingForKey = true }
+            guard payload.count >= 4 else {
+                drops += 1; current = nil; waitingForKey = true
+                return nil
+            }
+            if waitingForKey && !flags.contains(.idr) && !flags.contains(.config) { current = nil; return nil }
             let p = [UInt8](payload.prefix(4))
             let ms = UInt32(p[0]) | UInt32(p[1]) << 8 | UInt32(p[2]) << 16 | UInt32(p[3]) << 24
             payload = payload.dropFirst(4)
@@ -71,6 +74,7 @@ struct VideoAssembler {
             return nil  // a middle chunk without its start: skip
         }
         guard flags.contains(.end) else { return nil }
+        if current?.idr == true { waitingForKey = false }
         defer { current = nil }
         return current
     }

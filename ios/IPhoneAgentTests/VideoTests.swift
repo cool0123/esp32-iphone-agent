@@ -33,8 +33,11 @@ final class VideoTests: XCTestCase {
         XCTAssertNil(a.add(chunk(13, [.end], p)))           // 12 lost: the half unit is dropped
         XCTAssertEqual(a.drops, 1)
         XCTAssertNil(a.add(chunk(14, [.start, .end], p, ms: 3)))  // a P-frame after a gap is useless
-        XCTAssertNotNil(a.add(chunk(15, [.start, .end, .config], sps, ms: 4)))  // recovered on CONFIG
-        XCTAssertNotNil(a.add(chunk(16, [.start, .end], p, ms: 5)))
+        XCTAssertNotNil(a.add(chunk(15, [.start, .end, .config], sps, ms: 4)))
+        XCTAssertTrue(a.waitingForKey)
+        XCTAssertNil(a.add(chunk(16, [.start, .end], p, ms: 5)))  // CONFIG cannot repair reference pictures
+        XCTAssertNotNil(a.add(chunk(17, [.start, .end, .idr], idr, ms: 6)))
+        XCTAssertNotNil(a.add(chunk(18, [.start, .end], p, ms: 7)))
     }
 
     func testRecoversOnIDRAndWrapsSeq() {
@@ -55,6 +58,21 @@ final class VideoTests: XCTestCase {
         XCTAssertNil(a.add(chunk(1, [.bench], [UInt8](repeating: 0, count: 100))))
         XCTAssertEqual(a.benchBytes, 103)
         XCTAssertNotNil(a.add(chunk(2, [.start, .end, .idr], idr, ms: 2)))
+    }
+
+    func testIncompleteIDRAndMalformedStartDoNotUnlockPredictiveFrames() {
+        var a = VideoAssembler()
+        XCTAssertNil(a.add(chunk(1, [.start, .idr], idr, ms: 1)))
+        XCTAssertTrue(a.waitingForKey)
+        XCTAssertNil(a.add(chunk(2, [.start, .end], p, ms: 2)))
+        XCTAssertEqual(a.drops, 1)  // previous AU never ended, even with contiguous sequence numbers
+        XCTAssertTrue(a.waitingForKey)
+        XCTAssertNil(a.add(chunk(3, [.start, .end, .idr], [1, 2])))  // missing 4-byte timestamp
+        XCTAssertTrue(a.waitingForKey)
+        XCTAssertEqual(a.drops, 2)
+        XCTAssertNil(a.add(chunk(4, [.start, .end], p, ms: 3)))
+        XCTAssertNotNil(a.add(chunk(5, [.start, .end, .idr], idr, ms: 4)))
+        XCTAssertFalse(a.waitingForKey)
     }
 
     func testAnnexBSplitsNALUnits() {

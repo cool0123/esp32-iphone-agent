@@ -11,10 +11,11 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
         let width: Int, height: Int
         let decodeMs: Double
         let unit: AccessUnit
+        let streamID: Int
     }
 
     var onFrame: ((Frame) -> Void)?
-    var onError: ((String) -> Void)?
+    var onError: ((String, Int) -> Void)?
     var quality: Double = 0.75
     let queue = DispatchQueue(label: "video.decode")
 
@@ -27,34 +28,44 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
     private var gop: [AccessUnit] = []
     private var gopBytes = 0
     private static let gopMax = 64 << 20
+    private var needsIDR = true
+
+    /// A replayed config, lost packet or reconnected stream breaks the reference chain.
+    func invalidate() {
+        resetSession()
+        gop = []; gopBytes = 0
+        needsIDR = true
+    }
 
     /// Decode one access unit (call on `queue`).
-    func decode(_ unit: AccessUnit) {
-        if unit.idr { (gop, gopBytes) = ([], 0) }
+    func decode(_ unit: AccessUnit, streamID: Int = 0) {
+        if unit.config { invalidate() }
+        if unit.idr { (gop, gopBytes) = ([], 0); needsIDR = false }
+        if !unit.config && needsIDR { return }
         if gopBytes + unit.data.count <= Self.gopMax, unit.idr || !gop.isEmpty {
             gop.append(unit)
             gopBytes += unit.data.count
         }
-        let status = decodeOne(unit, emit: true)
+        let status = decodeOne(unit, emit: true, streamID: streamID)
         guard status != noErr else { return }
         resetSession()
-        if gop.last?.data == unit.data, gop.first?.idr == true, replay() {
+        if gop.last?.data == unit.data, gop.first?.idr == true, replay(streamID: streamID) {
             let n = gop.count
             DispatchQueue.main.async { DebugLog.write("decoder: session lost (\(status)); decoded the GOP again (\(n) units)") }
             return
         }
-        onError?("decode failed \(status)" + (status == kVTInvalidSessionErr ? " (session lost, e.g. in background)" : ""))
-        resetSession()  // rebuilt at the next IDR/config
+        onError?("decode failed \(status)" + (status == kVTInvalidSessionErr ? " (session lost, e.g. in background)" : ""), streamID)
+        invalidate()
     }
 
     /// Decode the cached GOP into a fresh session; only its last frame is shown.
-    private func replay() -> Bool {
-        for (i, u) in gop.enumerated() where decodeOne(u, emit: i == gop.count - 1) != noErr { return false }
+    private func replay(streamID: Int) -> Bool {
+        for (i, u) in gop.enumerated() where decodeOne(u, emit: i == gop.count - 1, streamID: streamID) != noErr { return false }
         return true
     }
 
     /// noErr also when there is nothing to decode yet (no slices, no SPS/PPS).
-    private func decodeOne(_ unit: AccessUnit, emit: Bool) -> OSStatus {
+    private func decodeOne(_ unit: AccessUnit, emit: Bool, streamID: Int) -> OSStatus {
         var slices: [Data] = []
         for nal in annexBUnits(unit.data) {
             switch nal[nal.startIndex] & 0x1f {
@@ -65,7 +76,7 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
             }
         }
         guard !slices.isEmpty else { return noErr }
-        guard ensureSession(), let session, let format else { return noErr }
+        guard ensureSession(streamID: streamID), let session, let format else { return noErr }
         var avcc = Data()
         for s in slices {
             var len = UInt32(s.count).bigEndian
@@ -79,12 +90,12 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
                                                        infoFlagsOut: &flags) { [weak self] status, _, image, _, _ in
             guard let self else { return }
             guard status == noErr, let image else {
-                self.onError?("decode callback status \(status)")
+                self.onError?("decode callback status \(status)", streamID)
                 return
             }
             guard emit else { return }
             let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
-            if let frame = self.jpeg(image, ms: ms, unit: unit) { self.onFrame?(frame) }
+            if let frame = self.jpeg(image, ms: ms, unit: unit, streamID: streamID) { self.onFrame?(frame) }
         }
         return status
     }
@@ -95,7 +106,7 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
         format = nil
     }
 
-    private func ensureSession() -> Bool {
+    private func ensureSession(streamID: Int) -> Bool {
         if session != nil { return true }
         guard let sps, let pps else { return false }
         var desc: CMFormatDescription?
@@ -108,13 +119,13 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
                     nalUnitHeaderLength: 4, formatDescriptionOut: &desc)
             }
         }
-        guard ok == noErr, let desc else { onError?("bad SPS/PPS \(ok)"); return false }
+        guard ok == noErr, let desc else { onError?("bad SPS/PPS \(ok)", streamID); return false }
         let attrs: [CFString: Any] = [kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA]
         var made: VTDecompressionSession?
         let status = VTDecompressionSessionCreate(allocator: nil, formatDescription: desc, decoderSpecification: nil,
                                                   imageBufferAttributes: attrs as CFDictionary,
                                                   outputCallback: nil, decompressionSessionOut: &made)
-        guard status == noErr, let made else { onError?("decoder create failed \(status)"); return false }
+        guard status == noErr, let made else { onError?("decoder create failed \(status)", streamID); return false }
         format = desc
         session = made
         return true
@@ -139,16 +150,16 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
         return sample
     }
 
-    private func jpeg(_ buffer: CVImageBuffer, ms: Double, unit: AccessUnit) -> Frame? {
+    private func jpeg(_ buffer: CVImageBuffer, ms: Double, unit: AccessUnit, streamID: Int) -> Frame? {
         var image: CGImage?
         VTCreateCGImageFromCVPixelBuffer(buffer, options: nil, imageOut: &image)
-        guard let image else { onError?("frame -> image failed"); return nil }
+        guard let image else { onError?("frame -> image failed", streamID); return nil }
         let out = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else {
             return nil
         }
         CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
-        return Frame(jpeg: out as Data, width: image.width, height: image.height, decodeMs: ms, unit: unit)
+        return Frame(jpeg: out as Data, width: image.width, height: image.height, decodeMs: ms, unit: unit, streamID: streamID)
     }
 }
