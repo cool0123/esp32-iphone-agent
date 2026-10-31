@@ -22,11 +22,11 @@ enum Mood: String, Codable, Hashable {
     init() {
         settings.baseURL = "https://api.deepseek.com"
         settings.model = "deepseek-flash"
-        disableDeepSeekThinking()
         let file = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
         pointer = Pointer(device: board.commands, calibrationFile: file.appendingPathComponent("calibration.json"), screen: feed)
         agent = AgentLoop(phone: pointer, screen: feed, actor: nil, planner: nil, trace: TraceStore())
+        disableDeepSeekThinking()
         feed.device = board.commands
         board.onVideo = { [weak self] in self?.feed.receive($0) }
         board.onStatus = { [weak self] in self?.feed.mirroring = $0.ap == "streaming"; if let up = $0.up { self?.feed.boardClock(ms: up) } }
