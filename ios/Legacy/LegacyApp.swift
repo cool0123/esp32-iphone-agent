@@ -1,6 +1,10 @@
 import SwiftUI
 import UIKit
 
+enum Mood: String, Codable, Hashable {
+    case sleeping, idle, listening, thinking, acting, success, failure, dizzy, content, wink
+}
+
 // The legacy target deliberately links neither ActivityKit nor AppIntents.
 @main struct LegacyApp: App {
     @StateObject private var model = LegacyModel()

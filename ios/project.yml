@@ -22,7 +22,6 @@ targets:
       - IPhoneAgent/Board
       - IPhoneAgent/Video
       - IPhoneAgent/App/IslandStatus.swift
-      - Shared/AgentFace.swift
       - IPhoneAgent/Services/Settings.swift
       - IPhoneAgent/Services/LLMClient.swift
       - IPhoneAgent/Services/ModelProvider.swift
