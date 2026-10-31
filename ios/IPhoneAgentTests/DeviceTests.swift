@@ -158,6 +158,47 @@ import XCTest
         XCTAssertEqual(device.sent, ["stream on"])  // no snap of an old, multi-minute GOP
     }
 
+    func testDelayedStreamRejectsInputWithoutReplayingTheGOP() async throws {
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device; feed.mirroring = true
+        try await feed.stream(true)
+        feed.boardClock(ms: 600_000)
+        feed.show(Data([0xff, 0xd8]), width: 320, height: 480)
+        let sourceAt = feed.capturedAt
+        XCTAssertFalse(feed.live)
+        do {
+            _ = try await feed.currentFrame(maxAge: 1, wait: 0, allowUnchanged: true)
+            XCTFail("a delayed stream must not authorize a gesture")
+        } catch is BlindError { }
+        XCTAssertEqual(device.sent, ["stream on"])
+        XCTAssertEqual(feed.capturedAt, sourceAt)
+    }
+
+    func testBrokenContinuousStreamDoesNotQueueSnapshotsAfterAnAction() async throws {
+        let previousMode = FrameMode.current
+        defer { FrameMode.current = previousMode }
+        FrameMode.current = .stream
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device; feed.mirroring = true
+        try await feed.stream(true)
+        feed.resetStream()
+        await feed.afterAction(since: now())
+        XCTAssertEqual(device.sent, ["stream on"])
+        XCTAssertFalse(feed.live)
+        XCTAssertNil(feed.frame)
+    }
+
+    func testExplicitSnapshotModeStillRequestsTheGOP() async throws {
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device; feed.mirroring = true
+        try await feed.stream(false)
+        do {
+            _ = try await feed.currentFrame(maxAge: 1, wait: 0)
+            XCTFail("the fake board supplied no frame")
+        } catch is BlindError { }
+        XCTAssertEqual(device.sent, ["stream off", "snap"])
+    }
+
     #if LEGACY_IOS
     func testLegacyHomeDoesNotPretendConsumerHomeWorked() async {
         let device = FakeDevice()

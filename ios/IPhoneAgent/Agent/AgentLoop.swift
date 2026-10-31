@@ -263,6 +263,13 @@ extension Pointer: Gestures {}
                 try await replan(stuck: stuck)
                 return false
             }
+            if let lost = try await waitForScreen() {
+                // The actor answered from a frame that has since fallen behind. Once video recovers,
+                // ask again instead of applying that old decision to a different screen.
+                record(nil, ["action": .str("reconnected"),
+                             "reason": .str(String(format: "screen delayed for %.0f s; decision discarded", lost))])
+                return false
+            }
             if name != "done" && name != "fail" {
                 try await gate?()
                 onDoing?(.acting(act))  // the thought (on the first act) names the target

@@ -164,6 +164,47 @@ import XCTest
         XCTAssertEqual(agent.steps.last?["reason"], .str("3 errors in a row"))
     }
 
+    func testDelayedActorDecisionIsDiscardedBeforeAnyGesture() async throws {
+        let screen = FakeScreen(), phone = FakeGestures()
+        let model = FakeModel { n in
+            if n == 1 {
+                screen.live = false
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    screen.frame = Data([0xff, 0xd8, 1])
+                    screen.updated = now(); screen.capturedAt = now(); screen.live = true
+                }
+                return "THINK: tap based on the old screen\nDO: tap 100 200"
+            }
+            return "THINK: the recovered screen is different\nDO: done fresh screen"
+        }
+        let agent = AgentLoop(phone: phone, screen: screen, actor: model, planner: model, trace: nil)
+        let first = try await agent.step()
+        XCTAssertFalse(first)
+        XCTAssertEqual(agent.steps.last?["action"], .str("reconnected"))
+        XCTAssertTrue(phone.calls.isEmpty)
+        let finished = try await agent.step()
+        XCTAssertTrue(finished)
+        XCTAssertEqual(agent.steps.last?["answer"], .str("fresh screen"))
+        XCTAssertTrue(phone.calls.isEmpty)
+    }
+
+    func testUnrecoveredStreamNeverExecutesAnActorGesture() async {
+        let screen = FakeScreen(), phone = FakeGestures()
+        let model = FakeModel { _ in
+            screen.live = false
+            return "THINK: old screen\nDO: tap 100 200"
+        }
+        let agent = AgentLoop(phone: phone, screen: screen, actor: model, planner: model, trace: nil)
+        agent.recoveryLimit = 0
+        do {
+            _ = try await agent.step()
+            XCTFail("a lost screen must stop the gesture")
+        } catch is BlindError { }
+        catch { XCTFail("unexpected error: \(error)") }
+        XCTAssertTrue(phone.calls.isEmpty)
+    }
+
     func testRunFinishesOnDone() async {
         let model = FakeModel { n in n == 1 ? "1. go home" : n == 2 ? "THINK: home\nDO: home" : "THINK: there\nDO: done ok" }
         let phone = FakeGestures()

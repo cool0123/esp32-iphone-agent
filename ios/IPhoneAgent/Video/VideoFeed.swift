@@ -169,17 +169,19 @@ extension ScreenSource {
         return max(8, gopBytes * 8 / 1000 / kbps * 2 + 3)
     }
 
-    /// A current frame for the model. While the board streams, the live stream has it (an IDR comes every
-    /// ~2 s): use a frame younger than `maxAge`, or wait for the next one. Snap only as a fallback, retried
-    /// once with a longer timeout. `allowUnchanged` accepts the existing frame while `live` still certifies
-    /// its source age: AirPlay legitimately sends nothing on a still screen, so snapping there would only
-    /// replay a growing GOP. Returns where the frame came from, for the log.
+    /// A current frame for the model. A continuous stream must catch up without replaying its history:
+    /// a snapshot would reset healthy references and put more old video ahead of the live suffix.
+    /// `allowUnchanged` accepts an existing frame only while `live` still certifies its source age.
+    /// Snapshots are used only when continuous streaming is off.
     @discardableResult
     func currentFrame(maxAge: Double = 1, wait: Double = 3, allowUnchanged: Bool = false) async throws -> String {
-        if streamOn && mirroring && !broken {
-            if allowUnchanged && live { return "live (unchanged)" }
-            if frame != nil && capturedAt > 0 && now() - capturedAt < maxAge { return "live" }
-            if await fresh(since: now() - maxAge, timeout: wait) != nil, !broken { return "live (waited)" }
+        if streamOn {
+            if mirroring && !broken {
+                if allowUnchanged && live { return "live (unchanged)" }
+                if frame != nil && capturedAt > 0 && now() - capturedAt < maxAge && live { return "live" }
+                if await fresh(since: now() - maxAge, timeout: wait) != nil, live { return "live (waited)" }
+            }
+            throw BlindError(reason: "live screen has not caught up to the present; operation cancelled")
         }
         do {
             try await snap()
@@ -215,10 +217,9 @@ extension ScreenSource {
         streamOn = on
     }
 
-    /// The model must never see a frame from before the action that ended at `since`. Stream: let the screen
-    /// settle, then wait (bounded) for a frame captured after the action; none while the stream is healthy means
-    /// the screen did not change, but a broken stream (waiting for an IDR) needs a snap. Snap: give the UI a moment,
-    /// snap, and snap once more if the GOP still ends before the action.
+    /// Wait for the source to pass the action time. A delayed continuous stream must catch up on its
+    /// own; absence of a newer frame does not prove the screen is unchanged and must not queue a GOP replay.
+    /// In explicit snap mode, give the UI time to update, then fetch its GOP.
     func afterAction(since: Double) async {
         do {
             if FrameMode.current == .snap {
@@ -231,9 +232,7 @@ extension ScreenSource {
             } else {
                 await settled()
                 if await newer(than: since, timeout: 1.5) { return }
-                guard broken || !streamOn else { return DebugLog.write("frame: none after the action; screen unchanged") }
-                DebugLog.write("frame: stream stale (waiting for an IDR); snapping")
-                try await snap()
+                DebugLog.write(broken ? "frame: waiting for a complete keyframe" : "frame: no newer source frame; waiting for live video")
             }
         } catch {
             DebugLog.write("frame after action failed: \(error.localizedDescription)")
