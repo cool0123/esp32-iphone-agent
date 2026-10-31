@@ -207,6 +207,47 @@ static void test_gop(void) {
   CHECK(!avcc_to_annexb(bad, sizeof bad));
 }
 
+static void test_gop_continuation(void) {
+  uint8_t arena[100], au[40] = {0, 0, 0, 1, 0x41}, cfg[] = {0, 0, 0, 1, 0x67};
+  gop_au aus[8];
+  gop_buf g;
+  gop_view view;
+  gop_init(&g, arena, sizeof arena, aus, 8);
+  gop_set_config(&g, cfg, sizeof cfg, 0);
+  CHECK(!gop_can_continue(&g, UINT32_MAX, 0));
+  gop_push(&g, au, 30, true, 1);
+  gop_push(&g, au, 30, false, 2);
+  uint32_t gen = g.gen;
+  int caught_up = g.n;
+  CHECK(!gop_can_continue(&g, gen, caught_up));
+  // The sender caught up once, but a tail AU arrives before the overflow. That tail cannot be lost.
+  gop_push(&g, au, 30, false, 3);
+  gop_push(&g, au, 30, false, 4);
+  CHECK(g.previous_n == 3 && g.n == 1);
+  CHECK(!gop_can_continue(&g, gen, caught_up));
+  CHECK(!gop_can_continue(&g, UINT32_MAX, 3));  // new subscription / failed chunk
+  CHECK(gop_can_continue(&g, gen, 3));        // includes a final AU copied before the overflow
+  CHECK(!gop_view_open(&g, &view));           // P-only history is never a snapshot
+  uint32_t first_overflow_gen = g.gen;
+  gop_push(&g, au, 30, false, 5);
+  gop_push(&g, au, 30, false, 6);
+  gop_push(&g, au, 30, false, 7);
+  CHECK(!gop_can_continue(&g, gen, 3));       // missed a whole generation, despite equal AU counts
+  CHECK(gop_can_continue(&g, first_overflow_gen, 3));
+  gop_push(&g, au, 30, true, 8);
+  CHECK(!gop_can_continue(&g, g.gen - 1, g.previous_n));  // a new IDR starts with CONFIG
+  CHECK(gop_view_open(&g, &view));
+
+  // Metadata exhaustion is an overflow even when the byte arena still has room.
+  gop_init(&g, arena, sizeof arena, aus, 2);
+  gop_push(&g, au, 5, true, 9);
+  gen = g.gen;
+  gop_push(&g, au, 5, false, 10);
+  gop_push(&g, au, 5, false, 11);
+  CHECK(g.used == 5 && g.previous_n == 2 && gop_can_continue(&g, gen, 2));
+  CHECK(!gop_can_continue(&g, gen, 1));
+}
+
 static void test_chunker(void) {
   uint8_t data[100], out[64], got[100];
   for (int i = 0; i < 100; i++) data[i] = (uint8_t)i;
@@ -250,6 +291,7 @@ int main(void) {
   test_bplist_overflow();
   test_gop();
   test_gop_view();
+  test_gop_continuation();
   test_video_ring();
   test_chunker();
   printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);

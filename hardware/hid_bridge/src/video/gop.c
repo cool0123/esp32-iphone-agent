@@ -19,6 +19,7 @@ void gop_set_config(gop_buf *g, const uint8_t *annexb, size_t len, uint32_t ts) 
 }
 
 static void restart(gop_buf *g) {
+  g->previous_n = g->n;
   g->used = 0;
   g->n = 0;
   g->gen++;
@@ -44,6 +45,11 @@ int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t t
   g->aus[g->n] = (gop_au){(uint32_t)g->used, (uint32_t)len, ts, idr};
   g->used += len;
   return g->n++;
+}
+
+bool gop_can_continue(const gop_buf *g, uint32_t sent_gen, int sent_n) {
+  return g->wait_idr && g->stream_only && sent_gen != UINT32_MAX &&
+         g->gen == sent_gen + 1 && sent_n == g->previous_n;
 }
 
 bool gop_view_open(const gop_buf *g, gop_view *view) {

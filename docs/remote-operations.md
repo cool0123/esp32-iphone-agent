@@ -110,12 +110,30 @@ iOS background decoding, board brownouts, or the phone's BLE video transport.
 
 ## iOS 15 acceptance evidence (2026-10-31)
 
-The operations build and build 4 (signed as version 1.0.4) were installed on iPhone9,4 / iOS 15.8.8. The phone
-connected to the authenticated LAN service on port 3233, preserved its Keychain credential across upgrades,
-and itself returned `model=deepseek-flash, image=red, reasoning_chars=0` from `/api/model-check` using the
-saved official DeepSeek endpoint and explicit `thinking.type=disabled`. This proves the model credential and
-fixed-image request; it does not prove an autonomous screen task or reliable background video. The latter
-remain unaccepted pending fresh, visually intact phone screenshots and an actual completed task.
+The operations build, build 4 (signed as version 1.0.4), and build 5 (signed as version 1.0.5, bundle build 5)
+were installed and launched on iPhone9,4 / iOS 15.8.8. The phone connected to the authenticated LAN service
+on port 3233, preserved its Keychain credential across upgrades, and itself returned
+`model=deepseek-flash, image=red, reasoning_chars=0` from `/api/model-check` using the saved official
+DeepSeek endpoint and explicit `thinking.type=disabled`. The same check passed after build 5 installation
+and after the latest board OTA. This proves the model credential and fixed-image request.
+
+A read-only home-screen task completed while the desktop BLE client and management service were stopped:
+the phone made two model requests and reported the time, weather, and dock apps, then ended. An independent
+operation task opened Calendar and dismissed its first-use prompt, but failed to return home and was stopped.
+A complete independent operation task and reliable long-term background video remain unaccepted.
+
+Build 5 permits observed AssistiveTouch → 主屏幕 navigation on iOS 15 and explicitly rejects the ineffective
+Legacy `home` shortcut. It also avoids replaying the entire GOP for a healthy, unchanged live stream; damaged
+or disconnected reference chains still require an IDR. The complete Calendar → home task needs a new device test.
+
+The latest board patch addresses BLE history-cache overflow: it omits CONFIG only when the sender's AU
+cursor exactly matches the end of the immediately preceding generation. A missing tail AU, a skipped generation,
+a new subscription, or a failed send cannot use this continuation. `lcs` counts admitted continuation transitions;
+this counter alone does not prove the phone decoded intact pictures. Host ASan/UBSan regressions and the full
+firmware build passed; OTA returned 0 and the board reported `bv="Nov  1 2026 02:49:50"`, `bo=17`, `usb=ok`,
+`ap=idle`, and `lcs=0` (the version is the device's build timestamp). Cross-overflow phone decoding has not yet
+been tested with this patch. OTA/brownout can leave mirroring disconnected; the owner must reopen Screen
+Mirroring → ESP32 Agent. `resync` was observed to stop mirroring without automatic reconnection.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.

@@ -27,5 +27,6 @@ struct VideoStats {
   int gop_frames;
   bool wait_idr;
   float fps;
+  uint32_t live_continuations;
 };
 VideoStats video_stats();

@@ -205,20 +205,21 @@ String board(const String &line, const String &id) {
 
 String statusJson(bool full) {
   static const char *apStates[] = {"idle", "connected", "streaming"};
+  // lcs counts BLE history-overflow transitions admitted by the exact previous-generation AU cursor.
   VideoStats v = video_stats();
   char s[512];
   snprintf(s, sizeof s,
            "{\"bv\":\"%s %s\",\"bo\":%lu,\"up\":%lu,\"rst\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\","
            "\"ip\":\"%s\",\"sta\":%d,"
            "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"idr_age\":%lu,"
-           "\"gop\":%lu,\"aus\":%d,\"ov\":%lu,\"adrop\":%lu,\"vwait\":%d,\"mdr\":%u,\"mdf\":%u,\"ota\":%d,"
+           "\"gop\":%lu,\"aus\":%d,\"ov\":%lu,\"lcs\":%lu,\"adrop\":%lu,\"vwait\":%d,\"mdr\":%u,\"mdf\":%u,\"ota\":%d,"
            "\"rssi\":%d,\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"n\":%d}}",
            __DATE__, __TIME__, (unsigned long)net_brownouts(),
            millis(), resetReason(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), usbState(), net_mode(), net_ip().c_str(), net_peers(),
            apStates[airplay_state()], cfg_width(), cfg_height(), (unsigned long)v.kbps, v.fps, (unsigned long)v.idr_ms,
            (unsigned long)v.idr_age, (unsigned long)v.gop_bytes, v.gop_frames, (unsigned long)v.overflows,
-           (unsigned long)v.oversize_drops, v.wait_idr, net_mdns_restarts(), net_mdns_fails(), ota_on() ? 1 : 0,
+           (unsigned long)v.live_continuations, (unsigned long)v.oversize_drops, v.wait_idr, net_mdns_restarts(), net_mdns_fails(), ota_on() ? 1 : 0,
            net_rssi(),
            ble_mtu(), ble_phy(),
            (unsigned long)ble_kbps(), (unsigned long)ble_drops(), (unsigned long)ble_reply_drops(), ble_peers());

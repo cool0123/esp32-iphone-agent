@@ -33,7 +33,7 @@ static volatile bool streaming;
 static uint16_t seq;
 static uint8_t chunk[VCHUNK_HDR + MAX_CHUNK];
 static uint32_t winStart, winBytes, winFrames;
-static volatile uint32_t lastIdr, oversizeDrops;
+static volatile uint32_t lastIdr, oversizeDrops, liveContinuations;
 static volatile uint32_t statKbps, statIdrMs, statAt;
 static volatile float statFps;
 static bool ready;
@@ -65,10 +65,10 @@ static bool copyAu(uint32_t gen, int i, gop_au *au) {
 }
 
 // Snapshot of the GOP state: generation, AU count, SPS/PPS.
-static bool snapshot(uint32_t *gen, int *n, uint8_t *cfg, size_t *cfg_len, uint32_t *cfg_ts, bool forStream) {
+static bool snapshot(uint32_t *gen, int *n, uint8_t *cfg, size_t *cfg_len, uint32_t *cfg_ts) {
   xSemaphoreTake(lock, portMAX_DELAY);
   *gen = gop.gen;
-  *n = gop.wait_idr && !(forStream && gop.stream_only) ? 0 : gop.n;
+  *n = gop.wait_idr ? 0 : gop.n;
   *cfg_len = gop.cfg_len;
   *cfg_ts = gop.cfg_ts;
   memcpy(cfg, gop.cfg, gop.cfg_len);
@@ -91,7 +91,7 @@ static String doSnap() {
     uint32_t gen, cfg_ts;
     size_t cfg_len;
     int n;
-    if (!snapshot(&gen, &n, cfg, &cfg_len, &cfg_ts, false)) return "err no decodable GOP (waiting for IDR)";
+    if (!snapshot(&gen, &n, cfg, &cfg_len, &cfg_ts)) return "err no decodable GOP (waiting for IDR)";
     if (!sendAu(cfg, cfg_len, VF_CONFIG | VF_SNAP, cfg_ts)) return "err ble send failed";
     bool complete = true;
     for (int i = 0; i < n && complete; i++) {
@@ -128,12 +128,12 @@ static String doBench(uint32_t kb) {
 static void streamStep() {
   static uint32_t txGen = UINT32_MAX;
   static uint32_t subscriberEpoch;
+  static int next;
   uint32_t epoch = ble_video_epoch();
   if (epoch != subscriberEpoch) {
     subscriberEpoch = epoch;
     txGen = UINT32_MAX;
   }
-  static int next;
   static uint8_t cfg[GOP_CFG_MAX];
   if (!streaming || !ble_video_room()) {
     txGen = UINT32_MAX;  // resend config + whole GOP when streaming resumes
@@ -142,14 +142,32 @@ static void streamStep() {
   uint32_t gen, cfg_ts;
   size_t cfg_len;
   int n;
-  if (!snapshot(&gen, &n, cfg, &cfg_len, &cfg_ts, true)) return;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  gen = gop.gen;
+  n = gop.wait_idr && !gop.stream_only ? 0 : gop.n;
+  cfg_len = gop.cfg_len;
+  cfg_ts = gop.cfg_ts;
+  bool onlyP = gop.wait_idr && gop.stream_only;
+  bool canContinue = gop_can_continue(&gop, txGen, next);
+  memcpy(cfg, gop.cfg, cfg_len);
+  xSemaphoreGive(lock);
+  if (!n || !cfg_len) return;
   if (gen != txGen) {
-    txGen = gen;
-    next = 0;
-    if (!sendAu(cfg, cfg_len, VF_CONFIG, cfg_ts)) { txGen = UINT32_MAX; return; }
+    if (onlyP) {
+      // CONFIG would invalidate a running decoder's references. Continue only if every AU before
+      // this overflow was sent; a previously caught-up but now lagging subscriber still needs an IDR.
+      if (!canContinue) { txGen = UINT32_MAX; return; }
+      txGen = gen;
+      next = 0;
+      liveContinuations++;
+    } else {
+      txGen = gen;
+      next = 0;
+      if (!sendAu(cfg, cfg_len, VF_CONFIG, cfg_ts)) { txGen = UINT32_MAX; return; }
+    }
   }
   for (gop_au au; next < n && copyAu(gen, next, &au); next++) {
-    if (ble_video_epoch() != subscriberEpoch) return;
+    if (ble_video_epoch() != subscriberEpoch) { txGen = UINT32_MAX; return; }
     if (!sendAu(scratch, au.len, au.idr ? VF_IDR : 0, au.ts)) { txGen = UINT32_MAX; return; }
   }
 }
@@ -278,5 +296,5 @@ VideoStats video_stats() {
   bool waiting = gop.wait_idr;
   xSemaphoreGive(lock);
   return {fresh ? statKbps : 0, statIdrMs, gopBytes, lastIdr ? now - lastIdr : 0,
-          overflows, oversizeDrops, frames, waiting, fresh ? statFps : 0};
+          overflows, oversizeDrops, frames, waiting, fresh ? statFps : 0, liveContinuations};
 }
