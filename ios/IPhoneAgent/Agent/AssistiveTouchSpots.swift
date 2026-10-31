@@ -27,7 +27,10 @@ enum AssistiveTouchSpots {
 Avoid tapping the AssistiveTouch floating button accidentally. On this iOS 15 device, the home action, \
 homescreen and Cmd+H do not work. To return Home, use two separate vision-checked taps: tap the visible \
 AssistiveTouch floating button, then on the next screenshot tap 主屏幕 (Home) in its menu. When that menu is \
-open and your goal is Home, never dismiss it by tapping outside.
+open and your goal is Home, never dismiss it by tapping outside. App Library is a Home Screen page: \
+its large app icons launch apps, not widgets. After returning Home, do not reopen an app just because \
+the task began by opening it. If the task requires the normal icon grid and App Library is showing, \
+swipe right to the normal Home Screen pages, then confirm and finish.
 """
         #else
         var text = """

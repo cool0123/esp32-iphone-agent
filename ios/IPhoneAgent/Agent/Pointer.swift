@@ -51,6 +51,9 @@ import Foundation
 
     var calibrated: Bool { span != nil }
 
+    /// Another controller may have moved the USB pointer between tasks.
+    func forgetPosition() { pos = nil; moves = 0 }
+
     private func remember(_ axis: String, _ sample: (Double, Double)) {
         seen[axis] = Array((seen[axis, default: []] + [sample]).suffix(12))  // deque(maxlen=12)
     }
@@ -295,7 +298,12 @@ import Foundation
         try await device.send("scroll \(lines) 0")
     }
 
-    func type(_ text: String) async throws { try await device.send("type \(text)") }
+    func type(_ text: String) async throws {
+        guard text.utf8.allSatisfy({ $0 < 128 }) else {
+            throw DeviceError(message: "USB typing supports ASCII only; use visible app icons or the on-screen keyboard for other text")
+        }
+        try await device.send("type \(text)")
+    }
     func key(_ combo: String) async throws { try await device.send("key \(combo)") }
     /// The board's consumer-control Home key ("AC Home"), which iOS treats like a keyboard's home key. Boards
     /// without it (older firmware) answer an error: then Cmd+H and the flick up from the home bar (a flick, not

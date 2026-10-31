@@ -205,10 +205,48 @@ import XCTest
         XCTAssertTrue(phone.calls.isEmpty)
     }
 
+    func testLiveButPreActionFrameNeverReachesTheNextActorCall() async throws {
+        let screen = FakeScreen(), phone = FakeGestures()
+        screen.capturedAt = now()
+        let actor = FakeModel { _ in "THINK: open the menu\nDO: tap 100 200" }
+        let agent = AgentLoop(phone: phone, screen: screen, actor: actor, planner: actor, trace: nil)
+        _ = try await agent.step()
+        XCTAssertTrue(screen.live)  // still inside the source-age limit, but from before the tap
+        XCTAssertLessThan(screen.capturedAt, agent.lastActed)
+        agent.recoveryLimit = 0
+        do {
+            _ = try await agent.nextActions()
+            XCTFail("the actor must not receive the old menu screenshot")
+        } catch is BlindError { }
+        catch { XCTFail("unexpected error: \(error)") }
+        XCTAssertEqual(actor.prompts.count, 1)
+        XCTAssertEqual(phone.calls, ["tap"])
+    }
+
+    func testActorWaitsForAnActualPostActionFrame() async throws {
+        let screen = FakeScreen(), phone = FakeGestures()
+        screen.capturedAt = now()
+        let fresh = Data([0xff, 0xd8, 7])
+        let actor = FakeModel { n in
+            if n == 1 { return "THINK: open the menu\nDO: tap 100 200" }
+            XCTAssertEqual(screen.frame, fresh)
+            return "THINK: the new screen confirms completion\nDO: done ok"
+        }
+        let agent = AgentLoop(phone: phone, screen: screen, actor: actor, planner: actor, trace: nil)
+        _ = try await agent.step()
+        let looking = Task { try await agent.nextActions() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(actor.prompts.count, 1)
+        screen.frame = fresh; screen.capturedAt = now(); screen.updated = now()
+        let actions = try await looking.value
+        XCTAssertEqual(actions.first?.act["action"], .str("done"))
+        XCTAssertEqual(phone.calls, ["tap"])
+    }
+
     func testRunFinishesOnDone() async {
         let model = FakeModel { n in n == 1 ? "1. go home" : n == 2 ? "THINK: home\nDO: home" : "THINK: there\nDO: done ok" }
         let phone = FakeGestures()
-        let agent = AgentLoop(phone: phone, screen: FakeScreen(), actor: model, planner: model, trace: nil)
+        let agent = AgentLoop(phone: phone, screen: AdvancingScreen(), actor: model, planner: model, trace: nil)
         await agent.run()
         XCTAssertEqual(phone.calls, ["home"])
         XCTAssertEqual(agent.steps.map { $0["action"]?.str }, ["plan", "home", "done"])
@@ -237,6 +275,16 @@ import XCTest
     var updated = 0.0
     var capturedAt = 0.0
     var aspect = 0.46
+}
+
+/// The successful full-run scenario has a source frame captured after each completed gesture.
+@MainActor private final class AdvancingScreen: ScreenSource {
+    var live = true
+    var frame: Data? = Data([0xff, 0xd8])
+    var updated = now()
+    var capturedAt = now()
+    var aspect = 0.46
+    func afterAction(since: Double) async { capturedAt = now(); updated = now() }
 }
 
 @MainActor final class FakeDevice: HIDDevice {

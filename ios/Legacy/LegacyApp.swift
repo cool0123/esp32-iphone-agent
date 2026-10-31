@@ -117,6 +117,7 @@ enum Mood: String, Codable, Hashable {
             agent.actor = try await settings.client("actor")
             agent.planner = try await settings.client("planner")
             try await receiveMirror()
+            pointer.forgetPosition()
             try agent.start(task)
             say("任务已准备，返回桌面后运行；App 在前台时暂停操作。")
         } catch { say(error.localizedDescription) }

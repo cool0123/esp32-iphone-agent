@@ -111,19 +111,22 @@ extension Pointer: Gestures {}
     /// Returns how many seconds it took, or nil if the screen was there all along. Never ends the run for a
     /// lost link before Recovery.limit.
     func waitForScreen(poll: Double = 0.5) async throws -> Double? {
-        guard let screen, !screen.live else { return nil }
+        guard let screen else { throw BlindError() }
+        func ready() -> Bool { screen.live && (lastActed == 0 || screen.capturedAt > lastActed) }
+        guard !ready() else { return nil }
         var recovery = Recovery(at: now(), limit: recoveryLimit)
         var shown: Recovery.Stage?
         defer { if shown != nil { onRecover?(nil) } }
         while true {
             try Task.checkCancellation()
-            let state = link?() ?? Recovery.Link(connected: phone?.device.connected ?? true, sta: nil,
-                                        ap: screen.live ? "streaming" : nil, frameAt: screen.live ? now() : 0)
+            var state = link?() ?? Recovery.Link(connected: phone?.device.connected ?? true, sta: nil,
+                                                 ap: screen.live ? "streaming" : nil, frameAt: 0)
+            state.frameAt = screen.live ? screen.capturedAt : 0
             switch recovery.next(state, at: now()) {
-            case .live where screen.live:
+            case .live where ready():
                 try await restore?()
                 await screen.settled()
-                return now() - recovery.started
+                if ready() { return now() - recovery.started }
             case .live: break
             case .wait(let stage):
                 if stage != shown { shown = stage; onRecover?(stage) }
@@ -275,8 +278,9 @@ extension Pointer: Gestures {}
                 onDoing?(.acting(act))  // the thought (on the first act) names the target
                 let started = now()
                 try await perform(act)
-                lastActed = now()
-                let s = lastActed - started
+                let finished = now()
+                if name != "wait" { lastActed = finished }
+                let s = finished - started
                 timing.hidMs += s * 1000
                 act["act_s"] = .num((s * 100).rounded() / 100)
                 spots += pointerPath(act)

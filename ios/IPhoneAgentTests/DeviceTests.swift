@@ -116,6 +116,32 @@ import XCTest
         XCTAssertEqual(device.sent[2], "move 200 400")
     }
 
+    func testUnicodeTypingIsRejectedBeforeAnyBoardCommand() async throws {
+        let device = FakeDevice()
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        let pointer = Pointer(device: device, calibrationFile: file)
+        for text in ["日历", "café", "A😀B"] {
+            do { try await pointer.type(text); XCTFail("non-ASCII text must not become HID bytes") }
+            catch let error as DeviceError { XCTAssertTrue(error.message.contains("ASCII")) }
+        }
+        XCTAssertTrue(device.sent.isEmpty)
+        try await pointer.type("Calendar 123")
+        XCTAssertEqual(device.sent, ["type Calendar 123"])
+    }
+
+    func testForgettingPositionRehomesBeforeTheNextTarget() async throws {
+        let device = FakeDevice()
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        let pointer = Pointer(device: device, calibrationFile: file)
+        pointer.finishCalibration(x: 0.5, y: 0.25)
+        try await pointer.point(0.5, 0.5)
+        device.sent = []
+        pointer.forgetPosition()
+        XCTAssertTrue(device.sent.isEmpty)  // invalidating a cache never sends blind HID
+        try await pointer.point(0.5, 0.5)
+        XCTAssertEqual(device.sent, ["home", "move 200 400"])
+    }
+
     func testShortStatusNotifyIsMergedWithTheFullRead() throws {
         let full = try XCTUnwrap(BoardStatus.decode(Data(#"{"up":1,"heap":81234,"usb":"ok","net":"ap","sta":2,"ap":"idle","kbps":180,"ble":{"mtu":247,"phy":2}}"#.utf8)))
         let short = try XCTUnwrap(BoardStatus.decode(Data(#"{"up":2,"usb":"asleep","net":"ap","ap":"streaming","ble":{"mtu":23}}"#.utf8)))
