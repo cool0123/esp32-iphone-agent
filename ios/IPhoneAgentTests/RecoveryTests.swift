@@ -56,13 +56,16 @@ import XCTest
         agent.link = { state }
         agent.onRecover = { stages.append($0) }
         agent.restore = { restored += 1 }
+        agent.recoveryLimit = 2
         agent.onStep = {  // the link drops right after the first move
             guard agent.steps.last?["action"] == .str("home") else { return }
             screen.live = false
             Task {
                 try? await Task.sleep(nanoseconds: 800_000_000)  // longer than settling after the move
                 state = Recovery.Link(connected: true, sta: 1, ap: "streaming", frameAt: now())
-                screen.live = true
+                // A restored transport alone is insufficient: this scenario also receives a new image.
+                screen.frame = Data([0xff, 0xd8, 1])
+                screen.updated = now(); screen.capturedAt = now(); screen.live = true
             }
         }
         await agent.run()

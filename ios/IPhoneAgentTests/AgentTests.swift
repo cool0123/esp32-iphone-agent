@@ -213,6 +213,8 @@ import XCTest
         _ = try await agent.step()
         XCTAssertTrue(screen.live)  // still inside the source-age limit, but from before the tap
         XCTAssertLessThan(screen.capturedAt, agent.lastActed)
+        // Even a newer transport notification cannot certify an old source image.
+        agent.link = { Recovery.Link(connected: true, sta: 1, ap: "streaming", frameAt: now()) }
         agent.recoveryLimit = 0
         do {
             _ = try await agent.nextActions()
