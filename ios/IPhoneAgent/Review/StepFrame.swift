@@ -176,10 +176,11 @@ private struct Trail: View {
                 }
                 if points.count >= 2, let last = points.last {
                     let prev = points[points.count - 2]
+                    let angle = atan2(Double(last.y - prev.y), Double(last.x - prev.x)) + .pi / 2
                     Image(systemName: "arrowtriangle.up.fill")
                         .font(.system(size: 18))
                         .foregroundStyle(ink)
-                        .rotationEffect(.radians(atan2(last.y - prev.y, last.x - prev.x) + .pi / 2))
+                        .rotationEffect(.radians(angle))
                         .position(last)
                         .opacity(Double(t))
                     Hand()
