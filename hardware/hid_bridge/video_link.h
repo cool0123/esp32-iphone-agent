@@ -2,6 +2,11 @@
 // or every access unit while `stream on`. Also runs `bench` and computes the video stats.
 #pragma once
 #include <Arduino.h>
+#include "src/video/gop.h"
+
+// Read-only Wi-Fi diagnostics shares the cache, with its own small copy buffer.
+bool video_gop_open(gop_view *view);
+bool video_gop_read(const gop_view *view, size_t offset, uint8_t *out, size_t len);
 
 bool video_begin();
 void video_on_config(const uint8_t *sps_pps, size_t len);  // AirPlay callbacks (mirror task)

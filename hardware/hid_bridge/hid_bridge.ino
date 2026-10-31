@@ -17,6 +17,7 @@
 #include "ble_link.h"
 #include "netcfg.h"
 #include "ota_link.h"
+#include "monitor_link.h"
 #include "video_link.h"
 #include "src/airplay/airplay.h"
 
@@ -130,6 +131,8 @@ const char *usbState() {
   return tud_suspended() ? "asleep" : "ok";
 }
 
+String monitorStatus() { return statusJson(true); }
+
 // Board-level commands from the app; everything else is an HID command for run().
 String board(const String &line, const String &id) {
   int sp = line.indexOf(' ');
@@ -176,6 +179,14 @@ String board(const String &line, const String &id) {
     ble_reply(id + " ok");  // answer before the link goes down
     ble_unpair();
     return "";
+  }
+  if (cmd == "monitor") {
+    if (arg == "off") { monitor_enable(false, nullptr, nullptr, 0); return "ok off"; }
+    if (arg != "on") return "err usage: monitor on|off";
+    if (!net_up()) return "err monitor needs a wifi link";
+    char credential[49];
+    if (!monitor_enable(true, monitorStatus, credential, sizeof credential)) return "err monitor listener failed";
+    return String("ok ") + net_ip() + " 3235 " + credential;
   }
   if (cmd == "ota") {  // per-boot window; the password is only ever sent over BLE
     if (arg == "off") {
@@ -283,10 +294,11 @@ void loop() {
   esp_task_wdt_reset();
   net_poll();
   ota_poll();
+  monitor_poll();
   if (ble_take_link_drop()) {  // any control peer lost: never leave a gesture held, even with a debug peer up
     mouse.release(MOUSE_LEFT);
     keyboard.releaseAll();
-    video_stream(false);
+    if (!ble_connected()) video_stream(false);
   }
 
   String line;
@@ -306,13 +318,13 @@ void loop() {
   rest.trim();
 #if DEBUG_SERIAL
   unsigned long started = millis();
-  // `ota on` answers with a one-time password; keep it out of the serial log.
-  bool secret = rest.startsWith("ota on");
+  // Maintenance windows answer with per-window credentials; never log them.
+  bool secret = rest.startsWith("ota on") || rest.startsWith("monitor on") || rest.startsWith("app ops ");
 #endif
   String reply = id.toInt() || id == "0" ? board(rest, id) : "err missing request id";
   if (reply.length()) ble_reply(id + " " + reply);
 #if DEBUG_SERIAL
-  Serial.printf("%s -> %s (%lu ms)\n", line.c_str(), secret ? "ok (password redacted)" : reply.c_str(),
+  Serial.printf("%s -> %s (%lu ms)\n", secret ? "maintenance (credential redacted)" : line.c_str(), secret ? "ok (credential redacted)" : reply.c_str(),
                 millis() - started);
 #endif
 }

@@ -122,6 +122,39 @@ static void test_bplist_overflow(void) {
   CHECK(bp_open(&r, b, sizeof b) < 0);
 }
 
+static void test_gop_view(void) {
+  uint8_t arena[100], out[100], cfg[] = {0, 0, 0, 1, 0x67};
+  gop_au aus[8];
+  gop_buf g;
+  gop_view v;
+  uint8_t au[40] = {0, 0, 0, 1, 0x65};
+  gop_init(&g, arena, sizeof arena, aus, 8);
+  CHECK(!gop_view_open(&g, &v));
+  gop_set_config(&g, cfg, sizeof cfg, 10);
+  CHECK(!gop_view_open(&g, &v));
+  gop_push(&g, au, 20, true, 11);
+  gop_push(&g, au, 20, false, 12);
+  CHECK(gop_view_open(&g, &v));
+  CHECK(v.captured_ms == 12 && v.bytes == 40 && v.cfg_len == sizeof cfg);
+  CHECK(!memcmp(v.cfg, cfg, sizeof cfg));
+  // Appending does not move the captured prefix or silently include newer bytes.
+  gop_push(&g, au, 20, false, 13);
+  CHECK(gop_view_read(&g, &v, 0, out, 40));
+  CHECK(!memcmp(out, au, 20) && !memcmp(out + 20, au, 20));
+  CHECK(!gop_view_read(&g, &v, 40, out, 1));
+  CHECK(!gop_view_read(&g, &v, SIZE_MAX, out, 1));
+  CHECK(!gop_view_read(&g, &v, 1, out, SIZE_MAX));
+  // A new IDR or overflow invalidates an in-flight HTTP download.
+  gop_push(&g, au, 20, true, 14);
+  CHECK(!gop_view_read(&g, &v, 0, out, 20));
+  CHECK(gop_view_open(&g, &v));
+  gop_push(&g, au, 40, false, 15);
+  gop_push(&g, au, 40, false, 16);
+  gop_push(&g, au, 1, false, 17);
+  CHECK(!gop_view_read(&g, &v, 0, out, 1));
+  CHECK(!gop_view_open(&g, &v));
+}
+
 static void test_gop(void) {
   static uint8_t arena[100];
   static gop_au aus[4];
@@ -190,6 +223,7 @@ int main(void) {
   test_bplist_utf16();
   test_bplist_overflow();
   test_gop();
+  test_gop_view();
   test_chunker();
   printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
   return fails != 0;

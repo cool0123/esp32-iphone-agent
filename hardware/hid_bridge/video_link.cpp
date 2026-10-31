@@ -122,6 +122,12 @@ static String doBench(uint32_t kb) {
 // send, start over from the GOP's IDR.
 static void streamStep() {
   static uint32_t txGen = UINT32_MAX;
+  static uint32_t subscriberEpoch;
+  uint32_t epoch = ble_video_epoch();
+  if (epoch != subscriberEpoch) {
+    subscriberEpoch = epoch;
+    txGen = UINT32_MAX;
+  }
   static int next;
   static uint8_t cfg[GOP_CFG_MAX];
   if (!streaming || !ble_video_room()) {
@@ -137,8 +143,10 @@ static void streamStep() {
     next = 0;
     if (!sendAu(cfg, cfg_len, VF_CONFIG, cfg_ts)) { txGen = UINT32_MAX; return; }
   }
-  for (gop_au au; next < n && copyAu(gen, next, &au); next++)
+  for (gop_au au; next < n && copyAu(gen, next, &au); next++) {
+    if (ble_video_epoch() != subscriberEpoch) return;
     if (!sendAu(scratch, au.len, au.idr ? VF_IDR : 0, au.ts)) { txGen = UINT32_MAX; return; }
+  }
 }
 
 static void videoTask(void *) {
@@ -225,6 +233,22 @@ static void request(const String &id, bool bench, uint32_t kb) {
 
 void video_snap(const String &id) { request(id, false, 0); }
 void video_bench(const String &id, uint32_t kb) { request(id, true, kb); }
+
+bool video_gop_open(gop_view *view) {
+  if (!ready) return false;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = gop_view_open(&gop, view);
+  xSemaphoreGive(lock);
+  return ok;
+}
+
+bool video_gop_read(const gop_view *view, size_t offset, uint8_t *out, size_t len) {
+  if (!ready) return false;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = gop_view_read(&gop, view, offset, out, len);
+  xSemaphoreGive(lock);
+  return ok;
+}
 
 VideoStats video_stats() {
   if (!ready) return {};

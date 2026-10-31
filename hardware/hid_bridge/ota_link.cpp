@@ -59,6 +59,7 @@ bool ota_enable(bool on, char *out, size_t out_len) {
     pass[0] = 0;
     return true;
   }
+  listen(false);  // a renewed window must install the newly generated password too
   makePass();
   snprintf(out, out_len, "%s", pass);
   listen(true);

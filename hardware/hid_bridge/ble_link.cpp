@@ -49,6 +49,7 @@ static std::atomic<int> ctrlPending;  // replies queued or sending + a status wa
 static volatile int peers[MAX_PEERS] = {-1, -1};
 static volatile bool subscribed[MAX_PEERS][CH_COUNT];
 static std::atomic<bool> linkDropped;
+static std::atomic<uint32_t> videoEpoch;  // new subscriber needs SPS/PPS + IDR before dependent frames
 static uint32_t winStart, winBytes;  // touched by the video task only
 static volatile uint32_t kbps;
 static std::atomic<uint32_t> drops, replyDrops;
@@ -151,7 +152,11 @@ class CharCb : public NimBLECharacteristicCallbacks {
   }
   void onSubscribe(NimBLECharacteristic *c, NimBLEConnInfo &ci, uint16_t sub) override {
     int i = indexOf(c), p = sub & 1 ? slotFor(ci.getConnHandle()) : slotOf(ci.getConnHandle());
-    if (i >= 0 && p >= 0) subscribed[p][i] = sub & 1;
+    if (i >= 0 && p >= 0) {
+      bool was = subscribed[p][i];
+      subscribed[p][i] = sub & 1;
+      if (i == CH_VIDEO && !was && (sub & 1)) videoEpoch++;
+    }
     BLE_LOG("conn %u: %s %s\n", ci.getConnHandle(), sub & 1 ? "subscribed" : "unsubscribed",
             i == CH_REPLY ? "reply" : i == CH_STATUS ? "status" : "video");
   }
@@ -208,11 +213,22 @@ static bool notifyOne(int slot, int ch, const uint8_t *p, size_t n, uint32_t sta
   }
 }
 
-// To every subscribed peer within one deadline; true if at least one got it.
+// Each peer gets its own deadline: one stalled recipient must not exhaust a healthy peer's budget.
 static bool notifyRaw(int ch, const uint8_t *p, size_t n, uint32_t timeout_ms) {
-  uint32_t start = millis();
   bool any = false;
-  for (int i = 0; i < MAX_PEERS; i++) any |= notifyOne(i, ch, p, n, start, timeout_ms);
+  for (int i = 0; i < MAX_PEERS; i++) {
+    int h = peers[i];
+    bool listening = h >= 0 && subscribed[i][ch];
+    bool sent = notifyOne(i, ch, p, n, millis(), timeout_ms);
+    any |= sent;
+    // Continuing after a missing video chunk leaves this decoder blind until the next IDR.
+    // Remove the stalled recipient; its reconnect subscribes afresh and restarts from the GOP.
+    if (ch == CH_VIDEO && listening && !sent && peers[i] == h) {
+      drops++;
+      subscribed[i][CH_VIDEO] = false;
+      server->disconnect(h);
+    }
+  }
   return any;
 }
 
@@ -330,6 +346,8 @@ void ble_status(const String &json) {
   statusDirty = true;
   xSemaphoreGive(statusLock);
 }
+
+uint32_t ble_video_epoch() { return videoEpoch.load(); }
 
 size_t ble_video_room() { return anySubscribed(CH_VIDEO) ? ble_mtu() - 3 - 3 : 0; }
 

@@ -46,6 +46,22 @@ int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t t
   return g->n++;
 }
 
+bool gop_view_open(const gop_buf *g, gop_view *view) {
+  if (g->wait_idr || g->n == 0 || !g->cfg_len || !g->aus[0].idr) return false;
+  view->gen = g->gen;
+  view->captured_ms = g->aus[g->n - 1].ts;
+  view->bytes = g->used;
+  view->cfg_len = g->cfg_len;
+  memcpy(view->cfg, g->cfg, g->cfg_len);
+  return true;
+}
+
+bool gop_view_read(const gop_buf *g, const gop_view *view, size_t offset, uint8_t *out, size_t len) {
+  if (g->gen != view->gen || view->bytes > g->used || offset > view->bytes || len > view->bytes - offset) return false;
+  memcpy(out, g->arena + offset, len);
+  return true;
+}
+
 bool annexb_has_idr(const uint8_t *p, size_t len) {
   for (size_t i = 0; i + 4 < len; i++)
     if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1 && (p[i + 3] & 0x1f) == 5) return true;

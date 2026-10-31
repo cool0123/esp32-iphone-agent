@@ -43,6 +43,16 @@ bool annexb_has_idr(const uint8_t *p, size_t len);
 // Returns false if the lengths do not tile the buffer exactly.
 bool avcc_to_annexb(uint8_t *p, size_t len);
 
+// An immutable prefix of a decodable GOP. Caller holds its GOP lock for each operation;
+// network I/O happens between reads, never while holding that lock.
+typedef struct {
+  uint32_t gen, captured_ms;
+  size_t bytes, cfg_len;
+  uint8_t cfg[GOP_CFG_MAX];
+} gop_view;
+bool gop_view_open(const gop_buf *g, gop_view *view);
+bool gop_view_read(const gop_buf *g, const gop_view *view, size_t offset, uint8_t *out, size_t len);
+
 // Splits one access unit into notifies: [seq u16 LE][flags][payload], the START chunk
 // carrying a u32 LE timestamp before the data.
 typedef struct {
