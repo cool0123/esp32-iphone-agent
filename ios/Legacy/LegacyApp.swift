@@ -20,6 +20,9 @@ enum Mood: String, Codable, Hashable {
     @Published var message = "先连接开发板，再开启屏幕镜像。"
     @Published var task = ""
     init() {
+        settings.baseURL = "https://api.deepseek.com"
+        settings.model = "deepseek-flash"
+        disableDeepSeekThinking()
         let file = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
         pointer = Pointer(device: board.commands, calibrationFile: file.appendingPathComponent("calibration.json"), screen: feed)
@@ -47,8 +50,16 @@ enum Mood: String, Codable, Hashable {
         pointer.applyProbe(x: .init(a: 1 / sx, b: 0, rms: 0), y: .init(a: 1 / sy, b: 0, rms: 0), samples: [])
         message = "已载入本机实测校准；更改指针速度后须重新测量。"
     }
+    private func disableDeepSeekThinking() {
+        guard URL(string: settings.baseURL)?.host?.lowercased() == "api.deepseek.com" else { return }
+        var extra = settings.extra
+        extra["thinking"] = ["type": "disabled"]
+        if let data = try? JSONSerialization.data(withJSONObject: extra, options: [.sortedKeys]),
+           let text = String(data: data, encoding: .utf8) { settings.extraBody = text }
+    }
     func start() async {
         do {
+            disableDeepSeekThinking()
             guard pointer.calibrated else { throw DeviceError(message: "先载入本机校准") }
             agent.actor = try await settings.client("actor")
             agent.planner = try await settings.client("planner")
@@ -75,6 +86,9 @@ struct LegacyView: View {
                     Button("接收镜像") { Task { do { try await model.feed.stream(true) } catch { model.message = error.localizedDescription } } }
                 }
                 Section(header: Text("视觉模型")) {
+                    if URL(string: settings.baseURL)?.host?.lowercased() == "api.deepseek.com" {
+                        Text("DeepSeek 推理已关闭")
+                    }
                     TextField("API 地址", text: $settings.baseURL).autocapitalization(.none).disableAutocorrection(true)
                     TextField("模型 ID", text: $settings.model).autocapitalization(.none).disableAutocorrection(true)
                     SecureField("API Key", text: $settings.apiKey)
