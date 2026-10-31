@@ -13,6 +13,10 @@ jobs:
         working-directory: ios
     steps:
       - uses: actions/checkout@v5
+      - name: Generate project (picks up sources not yet in the .pbxproj)
+        run: |
+          brew install xcodegen
+          xcodegen generate
       - name: Unit tests (simulator, unsigned)
         run: |
           sim=$(xcrun simctl list devices available | grep -Eo 'iPhone [0-9]+[A-Za-z ]*\(' | head -1 | sed 's/ ($//')
