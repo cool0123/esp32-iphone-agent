@@ -22,6 +22,9 @@ Existing HID commands, unchanged semantics from the old TCP protocol:
 `ping`, `home`, `move DX DY`, `press`, `release`, `click`, `scroll A B`, `type TEXT`, `key COMBO`.
 New:
 - `stream on|off` — continuously forward every access unit over `video` (default off).
+  OFF now advances an atomic cancellation epoch checked at live chunk boundaries, invalidating old history
+  even if ON follows before the video task drains its current AU. Explicit `snap`/`bench` are unchanged.
+  Firmware uploaded for this change; real-device cancellation/reconnect validation is still pending.
 - `snap` — send SPS/PPS + every AU since the last IDR (the current GOP), then reply `ok`.
 - `keyframe [status]` — **disabled by default**. `keyframe` returns `err experimental keyframes disabled`;
   `keyframe status` reports `enabled/sent/acked/failed/idr_age`. The first actual iOS 15 test sent a command,
@@ -81,7 +84,11 @@ network-read/link-ready callback: CONFIG or an IDR START may arrive before readi
 CoreBluetooth connection whose video characteristic is already notifying, the client first disables it and
 waits for that callback before resetting/re-enabling it, creating a subscription edge for prefix replay.
 This cannot recreate an IDR already missing from a P-only board history. Build 10 is installed; its restored
-subscription recovery has not yet passed a real-device test starting with a retained complete GOP.
+subscription recovery subsequently failed with a retained complete GOP after an actual force-quit/relaunch.
+Build 11 additionally restores Legacy stream intent on process launch and, once the command channel is ready,
+issues OFF, waits 200 ms, then resets video without clearing the known board clock and issues ON. It aborts
+if the link changes during that wait. This is a continuous prefix replay, not an automatic `snap` fallback or
+proof of source freshness. Build 11 is compiled but not yet signed/installed; validation remains pending.
 
 ## net (JSON)
 Read: `{"mode":"ap","ssid":"ESP32Agent-1A2B","pass":"<random 12 chars>","ip":"192.168.4.1"}`

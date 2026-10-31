@@ -329,5 +329,31 @@ cause and long-term power stability remain unresolved. No autonomous action task
 is in `build/reconnect-recovery/verification.json`. Review was self-review; no independent second reviewer
 completion is claimed.
 
+**Build 10 also failed a retained-GOP restart test.** After the owner restarted mirroring and left Agent in
+front, native video was complete/fresh (~0.20 s). A switcher force-quit removed its card and took Ops offline.
+The mirror and complete GOP remained. Relaunch authenticated as 1.0.10 and reconnected BLE, but native video
+still waited for a keyframe after history throughput fell back to the live rate. The desktop BLE central was
+removed during catch-up; no desktop stream restart, snapshot or keyframe request assisted this trial.
+
+Build 11 (`c36d5f14ad130507cad5bcd49e52229c20c0b416`) restores Legacy receiving intent from stream mode at process
+launch. After command readiness it sends OFF, waits 200 ms, resets references while retaining the known board
+clock, then sends ON; a changed/disconnected link aborts the old restart. Modern in-run reconnect uses the
+same helper. New regressions cover historical age and a second reconnect during that wait. Board firmware
+also advances an atomic epoch on OFF and checks it at live chunk boundaries, cancelling in-flight history
+even when ON follows quickly. The existing host suite does not execute this `video_link.cpp` path: sanitizer,
+wire tests and a full compile passed, but device cancellation/recovery verification remains pending.
+
+OTA returned 0 for SHA256 `3ee7aa95b9a24b83c0ef690549c478c3094c8f8d69f1535b050c5353061daba6`. The reboot raised
+`bo:22→23,rst=brownout`; supply is unresolved. The printed `bv` remains `Nov  1 2026 06:03:20` because the ino
+translation unit containing the compile-time timestamp was cached while only video_link.cpp changed. That
+string cannot uniquely identify this binary or prove the cancellation path is running. Only upload completion
+and management/USB/Wi-Fi recovery are recorded; real cancellation validation is outstanding.
+
+The build 11 iOS 15 IPA is downloaded (SHA256 `3558f3e0ca42532825405ed05719547c253085b0ea15d6f4578158626ff1430f`),
+but is **not signed/installed**. The phone remains on 1.0.10 with its task stopped. Mirroring is idle after OTA,
+no fresh image is available and the signing service is not running, so the owner must restart mirroring before
+fresh-image-guided installation/testing can continue. Experimental events remain disabled, OTA is off and
+radio preference is balance. Check `build/reconnect-recovery/verification.json` for CI and evidence updates.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
