@@ -12,6 +12,48 @@ settings:
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1"
 targets:
+  IPhoneAgentLegacy:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - Legacy
+      - IPhoneAgent/Agent
+      - IPhoneAgent/Board
+      - IPhoneAgent/Video
+      - IPhoneAgent/App/IslandStatus.swift
+      - Shared/AgentFace.swift
+      - IPhoneAgent/Services/Settings.swift
+      - IPhoneAgent/Services/LLMClient.swift
+      - IPhoneAgent/Services/ModelProvider.swift
+      - IPhoneAgent/Services/ModelRequestFailure.swift
+      - IPhoneAgent/Services/ModelResponseProgress.swift
+      - IPhoneAgent/Services/ModelConnectionCheck.swift
+      - IPhoneAgent/Services/Metrics.swift
+      - IPhoneAgent/Services/DebugLog.swift
+      - IPhoneAgent/Services/TraceStore.swift
+      - IPhoneAgent/Services/Redactor.swift
+      - path: ../prompts
+        type: folder
+        buildPhase: resources
+    info:
+      path: Legacy/Info.plist
+      properties:
+        CFBundleDisplayName: ESP32 Agent 15
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "2"
+        NSBluetoothAlwaysUsageDescription: 连接开发板以接收屏幕画面并操作手机。
+        UIBackgroundModes: [bluetooth-central]
+        UIFileSharingEnabled: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.esp32agent.legacy
+        PRODUCT_NAME: IPhoneAgentLegacy
+        GENERATE_INFOPLIST_FILE: NO
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) LEGACY_IOS
   IPhoneAgent:
     type: application
     platform: iOS
@@ -103,6 +145,10 @@ targets:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/IPhoneAgent.app/IPhoneAgent"
         BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
+  IPhoneAgentLegacy:
+    build:
+      targets:
+        IPhoneAgentLegacy: all
   IPhoneAgent:
     build:
       targets:

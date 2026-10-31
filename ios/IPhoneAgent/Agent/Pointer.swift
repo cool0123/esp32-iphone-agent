@@ -245,7 +245,12 @@ import Foundation
         }
         let (x, y) = pos!
         pos = nil  // unknown until the move succeeds
+        #if LEGACY_IOS
+        if tx != x { try await device.send("move \(tx - x) 0") }
+        if ty != y { try await device.send("move 0 \(ty - y)") }
+        #else
         try await device.send("move \(tx - x) \(ty - y)")
+        #endif
         (pos, moves) = ((tx, ty), moves + 1)
     }
 

@@ -74,7 +74,7 @@ import Foundation
             else if !scanning { scan() }
             let deadline = now() + 8
             while !connected && now() < deadline && (connecting || linking || scanning) {
-                try await Task.sleep(for: .milliseconds(200))
+                try await Task.sleep(nanoseconds: 200_000_000)
             }
         }
         guard connected, let peripheral, let characteristic = chars[BoardUUID.status] else {
@@ -88,7 +88,7 @@ import Foundation
         peripheral.readRSSI()
         let deadline = now() + 3
         while connected && revision == statusRevision && now() < deadline {
-            try await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
         guard connected, statusRevision != revision else {
             throw DeviceError(message: String(localized: "No fresh board status received. Try again."))

@@ -162,7 +162,7 @@ extension Pointer: Gestures {}
             guard retryTimeout, ModelRequestFailure.isTimeout(error), !Task.isCancelled else { throw error }
             DebugLog.write("model request timed out (\(role)); retrying once with a fresh screen")
             onDoing?(.retrying)
-            try await Task.sleep(for: .seconds(2))
+            try await Task.sleep(nanoseconds: 2_000_000_000)
             // Re-enter the gate and screen checks before retrying; no gesture is repeated.
             return try await ask(role, llm, system, prompt, temperature: temperature, retryTimeout: false)
         }

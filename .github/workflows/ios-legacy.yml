@@ -1,0 +1,34 @@
+name: iOS 15 build
+on:
+  workflow_dispatch:
+  push:
+    paths: ["ios/**", "prompts/**", ".github/workflows/ios-legacy.yml"]
+jobs:
+  legacy:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: cd ios && xcodegen generate
+      - name: Compile for iOS 15
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/IPhoneAgent.xcodeproj -scheme IPhoneAgentLegacy -configuration Release -sdk iphoneos -derivedDataPath build/legacy CODE_SIGNING_ALLOWED=NO build >build-legacy.log 2>&1 || { tail -200 build-legacy.log; exit 1; }
+      - name: Package
+        run: |
+          mkdir -p build/package/Payload
+          cp -R build/legacy/Build/Products/Release-iphoneos/IPhoneAgentLegacy.app build/package/Payload/
+          plutil -extract MinimumOSVersion raw build/package/Payload/IPhoneAgentLegacy.app/Info.plist
+          otool -L build/package/Payload/IPhoneAgentLegacy.app/IPhoneAgentLegacy | tee dependencies.txt
+          if grep -E 'ActivityKit|AppIntents' dependencies.txt; then exit 1; fi
+          cd build/package && zip -qry IPhoneAgent-iOS15-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IPhoneAgent-iOS15
+          path: build/package/IPhoneAgent-iOS15-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: legacy-build-log
+          path: build-legacy.log
