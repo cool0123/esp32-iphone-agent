@@ -22,10 +22,19 @@ enum AssistiveTouchSpots {
 
     /// The prompt rule, with the remembered spots in the models' 0–1000 coordinates.
     static var rule: String {
+        #if LEGACY_IOS
+        var text = """
+Avoid tapping the AssistiveTouch floating button accidentally. On this iOS 15 device, the home action, \
+homescreen and Cmd+H do not work. To return Home, use two separate vision-checked taps: tap the visible \
+AssistiveTouch floating button, then on the next screenshot tap 主屏幕 (Home) in its menu. When that menu is \
+open and your goal is Home, never dismiss it by tapping outside.
+"""
+        #else
         var text = """
 Never tap the AssistiveTouch floating button (a small translucent round button at a screen edge). \
 If an AssistiveTouch menu panel is visible, close it by tapping outside it.
 """
+        #endif
         let spots = all.map { "(\(Int($0.x * 1000)), \(Int($0.y * 1000)))" }
         if !spots.isEmpty { text += " It was last seen near " + spots.joined(separator: ", ") + "; keep away from there." }
         return text

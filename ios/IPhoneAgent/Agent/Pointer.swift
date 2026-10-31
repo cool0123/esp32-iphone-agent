@@ -301,11 +301,17 @@ import Foundation
     /// without it (older firmware) answer an error: then Cmd+H and the flick up from the home bar (a flick, not
     /// a rest: resting opens the app switcher).
     func goHome() async throws {
+        #if LEGACY_IOS
+        // AC Home and Cmd+H both returned success without changing this iOS 15 device. Never pretend
+        // otherwise: the actor uses two separately observed AssistiveTouch taps instead.
+        throw DeviceError(message: "home unavailable; use AssistiveTouch then 主屏幕")
+        #else
         if (try? await device.send("homescreen")) != nil { return }
         try await key("cmd+h")
         try await Task.sleep(nanoseconds: 350_000_000)
         try await swipe(0.5, 0.995, 0.5, 0.45, hold: false)
         pos = nil  // starting at the screen's edge may have clamped the pointer: re-home before the next move
+        #endif
     }
     func goBack() async throws {
         try await swipe(0.005, 0.45, 0.6, 0.45, hold: false)

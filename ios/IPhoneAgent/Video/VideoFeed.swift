@@ -171,10 +171,13 @@ extension ScreenSource {
 
     /// A current frame for the model. While the board streams, the live stream has it (an IDR comes every
     /// ~2 s): use a frame younger than `maxAge`, or wait for the next one. Snap only as a fallback, retried
-    /// once with a longer timeout. Returns where the frame came from, for the log.
+    /// once with a longer timeout. `allowUnchanged` accepts the existing frame while `live` still certifies
+    /// its source age: AirPlay legitimately sends nothing on a still screen, so snapping there would only
+    /// replay a growing GOP. Returns where the frame came from, for the log.
     @discardableResult
-    func currentFrame(maxAge: Double = 1, wait: Double = 3) async throws -> String {
+    func currentFrame(maxAge: Double = 1, wait: Double = 3, allowUnchanged: Bool = false) async throws -> String {
         if streamOn && mirroring && !broken {
+            if allowUnchanged && live { return "live (unchanged)" }
             if frame != nil && capturedAt > 0 && now() - capturedAt < maxAge { return "live" }
             if await fresh(since: now() - maxAge, timeout: wait) != nil, !broken { return "live (waited)" }
         }

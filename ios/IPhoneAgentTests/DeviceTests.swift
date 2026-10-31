@@ -147,6 +147,33 @@ import XCTest
         XCTAssertNil(feed.frame)
     }
 
+    func testHealthyStillStreamDoesNotReplayTheWholeGOP() async throws {
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device; feed.mirroring = true
+        try await feed.stream(true)
+        feed.show(Data([0xff, 0xd8]), width: 320, height: 480)
+        XCTAssertTrue(feed.live)
+        let source = try await feed.currentFrame(maxAge: 0, wait: 0, allowUnchanged: true)
+        XCTAssertEqual(source, "live (unchanged)")
+        XCTAssertEqual(device.sent, ["stream on"])  // no snap of an old, multi-minute GOP
+    }
+
+    #if LEGACY_IOS
+    func testLegacyHomeDoesNotPretendConsumerHomeWorked() async {
+        let device = FakeDevice()
+        let pointer = Pointer(device: device, calibrationFile: FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".json"))
+        do {
+            try await pointer.goHome()
+            XCTFail("iOS 15 must use the observed AssistiveTouch menu")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("AssistiveTouch"))
+        }
+        XCTAssertFalse(device.sent.contains("homescreen"))
+        XCTAssertFalse(device.sent.contains("key cmd+h"))
+    }
+    #endif
+
     func testInvalidVideoChainRejectsQueuedFramesUntilACompleteIDR() async {
         let feed = VideoFeed(), device = FakeDevice()
         feed.device = device; feed.mirroring = true

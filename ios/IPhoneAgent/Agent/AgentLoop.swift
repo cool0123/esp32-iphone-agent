@@ -357,7 +357,7 @@ extension Pointer: Gestures {}
         if a["action"]?.str != "wait" {
             // A model reply only proves that some frame existed earlier. Fetch a fresh frame before
             // every real gesture so a broken/stale stream can never authorize another blind action.
-            if let feed = screen as? VideoFeed { try await feed.currentFrame(maxAge: 1, wait: 2) }
+            if let feed = screen as? VideoFeed { try await feed.currentFrame(maxAge: 1, wait: 2, allowUnchanged: true) }
             guard screen?.live == true else { throw BlindError() }
         }
         func p(_ k: String) -> Double { (a[k]?.double ?? 0) / 1000 }
