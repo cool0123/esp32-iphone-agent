@@ -20,7 +20,7 @@ enum Mood: String, Codable, Hashable {
     private(set) lazy var ops = OpsController(app: self)
     var opsRecovering: Bool { agent.running && !feed.live }
     var opsNeedsHelp: Bool { false }
-    private var receiving = false
+    private var receiving = FrameMode.current == .stream
     @Published var boardMessage = ""
     @Published var message = "先连接开发板，再开启屏幕镜像。"
     @Published var task = ""
@@ -38,7 +38,12 @@ enum Mood: String, Codable, Hashable {
         board.onLinkPreparing = { [weak self] in self?.feed.resetStream() }
         board.onLinkUp = { [weak self] in
             guard let self else { return }
-            if receiving { Task { try? await self.feed.stream(true) } }
+            if receiving {
+                Task {
+                    do { try await self.feed.restartStreamAfterLink() }
+                    catch { self.say("视频重连失败：\(error.localizedDescription)") }
+                }
+            }
         }
         board.onLinkDown = { [weak self] in self?.feed.linkLost() }
         board.log = { [weak self] text in self?.boardMessage = text; DebugLog.write(text) }

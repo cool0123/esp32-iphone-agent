@@ -278,6 +278,34 @@ import XCTest
         XCTAssertNil(feed.frame)
     }
 
+    func testReconnectRestartsContinuousForwardingWithoutMakingHistoryFresh() async throws {
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device; feed.mirroring = true
+        feed.boardClock(ms: 600_000)
+        try await feed.restartStreamAfterLink()
+        XCTAssertEqual(device.sent, ["stream off", "stream on"])
+        XCTAssertTrue(feed.streamOn)
+        XCTAssertNil(feed.frame)
+        XCTAssertFalse(feed.live)
+        feed.show(Data([0xff, 0xd8]), width: 320, height: 480)
+        XCTAssertGreaterThan(now() - feed.capturedAt, 599)  // preserved clock rejects the old prefix
+        XCTAssertFalse(feed.live)
+    }
+
+    func testReconnectDuringVideoRestartDoesNotEnableANewerLink() async {
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device
+        let change = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            device.links += 1
+        }
+        do { try await feed.restartStreamAfterLink(); XCTFail("old restart must not cross a reconnect") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("link changed")) }
+        await change.value
+        XCTAssertEqual(device.sent, ["stream off"])
+        XCTAssertFalse(feed.streamOn)
+    }
+
     func testVideoPrefixBeforeLinkReadySurvivesTheReadinessCallback() {
         #if LEGACY_IOS
         let model = LegacyModel()

@@ -121,7 +121,7 @@ import UIKit
             metrics.mtu = board.mtu
             if agent.running && !MockMode.on && FrameMode.current == .stream {  // the board forgot `stream on`: the paused run needs the screen back
                 Task { [weak self] in
-                    do { try await self?.feed.stream(true); DebugLog.write("recover: BLE back, stream on again") } catch {
+                    do { try await self?.feed.restartStreamAfterLink() } catch {
                         DebugLog.write("recover: stream on after reconnect failed: \(error.localizedDescription)")
                     }
                 }

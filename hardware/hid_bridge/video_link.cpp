@@ -2,6 +2,7 @@
 #include "video_link.h"
 #include <esp_heap_caps.h>
 #include <esp_random.h>
+#include <atomic>
 #include "src/video/ring.h"
 #include "ble_link.h"
 #include "src/video/gop.h"
@@ -30,7 +31,8 @@ static SemaphoreHandle_t lock;
 static uint8_t *scratch;
 static QueueHandle_t reqs;
 static TaskHandle_t task;
-static volatile bool streaming;
+static std::atomic<bool> streaming;
+static std::atomic<uint32_t> streamEpoch;  // OFF cancels in-flight history even if ON follows before it drains
 static uint16_t seq;
 static uint8_t chunk[VCHUNK_HDR + MAX_CHUNK];
 static uint32_t winStart, winBytes, winFrames;
@@ -40,12 +42,13 @@ static volatile float statFps;
 static bool ready;
 
 // One access unit as notifies. A failed chunk still consumes its seq, so the app sees a gap.
-static bool sendAu(const uint8_t *p, size_t n, uint8_t flags, uint32_t ts) {
+static bool sendAu(const uint8_t *p, size_t n, uint8_t flags, uint32_t ts, bool live = false, uint32_t epoch = 0) {
   size_t room = min(ble_video_room(), MAX_CHUNK);
   if (room < 5) return false;
   vchunk c;
   vchunk_begin(&c, p, n, flags, ts);
   for (size_t len; (len = vchunk_next(&c, chunk, room, seq)) > 0;) {
+    if (live && (!streaming || streamEpoch.load() != epoch)) return false;
     bool ok = ble_video_send(chunk, len);
     seq++;
     if (!ok) return false;
@@ -128,7 +131,7 @@ static String doBench(uint32_t kb) {
 // send, start over from the GOP's IDR.
 static void streamStep() {
   static uint32_t txGen = UINT32_MAX;
-  static uint32_t subscriberEpoch;
+  static uint32_t subscriberEpoch, txEpoch;
   static int next;
   static gop_recovery recovery;
   uint32_t epoch = ble_video_epoch();
@@ -136,6 +139,8 @@ static void streamStep() {
     subscriberEpoch = epoch;
     txGen = UINT32_MAX;
   }
+  uint32_t run = streamEpoch.load();
+  if (run != txEpoch) { txEpoch = run; txGen = UINT32_MAX; }
   static uint8_t cfg[GOP_CFG_MAX];
   if (!streaming || !ble_video_room()) {
     txGen = UINT32_MAX;  // resend config + whole GOP when streaming resumes
@@ -169,12 +174,12 @@ static void streamStep() {
     } else {
       txGen = gen;
       next = 0;
-      if (!sendAu(cfg, cfg_len, VF_CONFIG, cfg_ts)) { txGen = UINT32_MAX; return; }
+      if (!sendAu(cfg, cfg_len, VF_CONFIG, cfg_ts, true, run)) { txGen = UINT32_MAX; return; }
     }
   }
   for (gop_au au; next < n && copyAu(gen, next, &au); next++) {
     if (ble_video_epoch() != subscriberEpoch) { txGen = UINT32_MAX; return; }
-    if (!sendAu(scratch, au.len, au.idr ? VF_IDR : 0, au.ts)) { txGen = UINT32_MAX; return; }
+    if (!sendAu(scratch, au.len, au.idr ? VF_IDR : 0, au.ts, true, run)) { txGen = UINT32_MAX; return; }
   }
 }
 
@@ -256,7 +261,10 @@ void video_on_au(const uint8_t *au, size_t len, bool idr) {
   xTaskNotifyGive(task);
 }
 
-void video_stream(bool on) { streaming = on; }
+void video_stream(bool on) {
+  streaming = on;
+  if (!on) streamEpoch++;
+}
 
 static void request(const String &id, bool bench, uint32_t kb) {
   if (!ready) { ble_reply(id + " err video unavailable"); return; }

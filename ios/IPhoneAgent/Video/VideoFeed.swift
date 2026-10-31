@@ -217,6 +217,23 @@ extension ScreenSource {
         streamOn = on
     }
 
+    /// A new decoder cannot inherit the board's live cursor, including a restored BLE subscription.
+    /// Restart continuous forwarding only after the command channel is ready. Preserve the board clock:
+    /// a newly decoded historical prefix must keep its original source age.
+    func restartStreamAfterLink() async throws {
+        guard let device, device.connected else { throw DeviceError(message: "board not connected") }
+        let link = device.links
+        try await stream(false)
+        // The firmware video task polls at 20 ms; let it observe OFF before issuing ON.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        guard device.connected, device.links == link else { throw DeviceError(message: "board link changed during video restart") }
+        assembler.reset()
+        invalidateVideo()
+        note = "waiting for a complete keyframe"
+        try await stream(true)
+        DebugLog.write("video forwarding restarted after link readiness; waiting for live source")
+    }
+
     /// Wait for the source to pass the action time. A delayed continuous stream must catch up on its
     /// own; absence of a newer frame does not prove the screen is unchanged and must not queue a GOP replay.
     /// In explicit snap mode, give the UI time to update, then fetch its GOP.
