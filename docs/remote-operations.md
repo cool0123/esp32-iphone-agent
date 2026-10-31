@@ -158,5 +158,25 @@ another board reboot (`bo=18`). The computer LAN decoder is live, but the newly 
 still lacks a complete reference chain (`frameLive=false`, `frameAge=-1`). Stream reception is enabled,
 no task is running, and mirroring must be manually stopped and reopened before build 6 task acceptance.
 
+After the owner reopened mirroring, build 6 had a live, intact phone screenshot (source age about 0.08 s).
+Three further independent attempts stopped desktop BLE and management for about 45 s each, restoring only
+management for evidence. The plain task failed because `type 日历` became ASCII gibberish despite `ok`.
+An icon-only attempt also failed; a third attempt with icon hints opened Calendar and used AssistiveTouch,
+but repeatedly reopened Calendar after returning to App Library instead of confirming completion. All were
+stopped, and **none passed the complete task**. The source-delay decision discard did execute on the phone,
+without whole-GOP snapshots. During the last attempt, overflow left `ov=1,lcs=0,vwait=1` and the phone lost
+live video: the exact-cursor continuation check was not satisfied. A lagging subscriber is still not
+protected across history overflow; complete phone decoding across overflow remains unverified.
+
+Build 7 (`7c702b7`) additionally requires a source frame captured after the last real gesture before a model
+call, rejects non-ASCII USB typing, invalidates Legacy pointer position at task start, and explains App Library
+navigation. Its final iOS 15 build `41238052355` passed; the downloaded IPA is `build/IPhoneAgent-iOS15-build7-verified.ipa`
+with SHA256 `568b3b6c5c073a13bb4d401fd6d43e72889864ec4850b6a4aa08422b5f1e5271`. Follow-up test commit `af68869` models an
+actual new image on recovery without weakening the existing assertions, and checks that a recent connection
+notification cannot certify an old source image. CI `41238052366` passed, including firmware, Python 3.10/3.12
+and **97 simulator tests with zero failures**. The separate iOS build `41238052376` has compiled successfully;
+its duplicate simulator job is still running. Build 7 has not been signed or installed; the phone remains on 1.0.6, both current
+screens are unavailable, and AllSign's wireless service is offline. Manual mirroring recovery is required.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
