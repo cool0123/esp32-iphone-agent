@@ -57,3 +57,26 @@ jobs:
           name: IPhoneAgent-unsigned-ipa
           path: build/IPhoneAgent-unsigned.ipa
           if-no-files-found: error
+
+  test:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          (cd ios && xcodegen generate)
+
+      - name: Unit tests (simulator)
+        run: |
+          set -o pipefail
+          DEVICE=$(xcrun simctl list devicetypes | grep -m1 'iPhone 16 ' | sed -E 's/.*\((com\.apple\.CoreSimulator\.SimDeviceType\.[^)]+)\)/\1/')
+          RUNTIME=$(xcrun simctl list runtimes | grep -m1 'iOS' | sed -E 's/.*(iOS [0-9.]+).*/\1/')
+          echo "device=$DEVICE runtime=$RUNTIME"
+          xcodebuild test -project ios/IPhoneAgent.xcodeproj -scheme IPhoneAgent \
+            -destination "platform=iOS Simulator,name=iPhone 16" \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | xcbeautify || exit 1
