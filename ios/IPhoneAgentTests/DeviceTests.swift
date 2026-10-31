@@ -129,6 +129,24 @@ import XCTest
         XCTAssertEqual(m.ble?.phy, 2)
     }
 
+    func testReplayedFrameIsNotLiveEvenWhenJustDecoded() async throws {
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        // The board has been up 10 minutes, but this decoded AU was captured at its boot.
+        feed.boardClock(ms: 600_000)
+        feed.show(Data([0xff, 0xd8]), width: 320, height: 480)
+        XCTAssertLessThan(now() - feed.updated, 1)
+        XCTAssertGreaterThan(now() - feed.capturedAt, 599)
+        XCTAssertFalse(feed.live)
+        do {
+            _ = try await feed.currentFrame(maxAge: 1, wait: 0)
+            XCTFail("replayed frame must be rejected, including a snap that adds no fresh frame")
+        } catch is BlindError { }
+        feed.linkLost()
+        XCTAssertNil(feed.frame)
+    }
+
     func testFreshCalibrationHasNoDriftAndSurvivesARestart() {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         let pointer = Pointer(device: FakeDevice(), calibrationFile: file)

@@ -36,6 +36,8 @@ def test_admin_auth_and_offline_status():
         assert r.status_code == 200
         assert r.json()["connected"] is False
         assert c.get("/api/config", headers=ADMIN).status_code == 503
+        assert c.post("/api/model-check").status_code == 401
+        assert c.post("/api/model-check", headers=ADMIN).status_code == 503
 
 
 def test_device_auth_and_telemetry():
@@ -51,6 +53,26 @@ def test_device_auth_and_telemetry():
             assert r.json()["telemetry"]["board"]["gop"] == 42
         r = c.get("/api/status", headers=ADMIN)
         assert r.json()["connected"] is False
+
+
+@pytest.mark.parametrize("ok, expected", [(True, 200), (False, 409)])
+def test_model_check_relays_phone_result(ok, expected):
+    with client() as c:
+        with c.websocket_connect("/ws/device", headers=DEVICE) as ws:
+            responses = []
+            thread = threading.Thread(target=lambda: responses.append(c.post("/api/model-check", headers=ADMIN)))
+            thread.start()
+            command = ws.receive_json()
+            assert command["name"] == "model.check" and command["params"] == {}
+            ws.send_json({"type": "result", "id": command["id"], "ok": ok,
+                          "data": {"result": "image=red, reasoning_chars=0"}, "error": "LLM HTTP 401"})
+            thread.join(timeout=3)
+            assert not thread.is_alive()
+            assert responses[0].status_code == expected
+            if ok:
+                assert responses[0].json()["data"]["result"] == "image=red, reasoning_chars=0"
+            else:
+                assert responses[0].json()["detail"] == "LLM HTTP 401"
 
 
 def test_config_round_trip_and_snapshot():

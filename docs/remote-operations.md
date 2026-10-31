@@ -2,7 +2,7 @@
 
 The iOS app makes an **outbound** WebSocket connection to a small management service. The phone works over
 cellular or Wi-Fi; no inbound phone listener, public ESP32 port, or computer-side agent is required.
-The service relays only status, diagnostics, screenshots, whitelisted configuration, and agent stop. It never
+The service relays only status, diagnostics, screenshots, whitelisted configuration, a fixed image/model connection check, and agent stop. It never
 exposes arbitrary HID commands, the LLM API key, or the device-management token.
 
 ## 1. Start the management service
@@ -25,7 +25,7 @@ the public internet.
 
 ## 2. Configure the iOS app
 
-Open **Settings → Remote Management**:
+Open **Settings → Remote Management**, or the **远程运维** section in **ESP32 Agent 15** (iOS 15+):
 
 - Management URL: the service's HTTPS base URL, for example `https://ops.example.com`.
 - Device token: `OPS_DEVICE_TOKEN` for this phone (stored in the iOS Keychain).
@@ -47,6 +47,7 @@ Send `Authorization: Bearer $OPS_ADMIN_TOKEN` on every request. Paths below are 
 | GET | `/api/logs` | Last 100 redacted debug-log lines |
 | GET | `/api/frame.jpg` | Current mirrored screenshot |
 | POST | `/api/stop` | Stop the agent and release the pointer |
+| POST | `/api/model-check` | Run a fixed red-image check using the phone's saved model/credential |
 
 Writable fields: `baseURL`, `model`, `plannerModel`, `actorModel`, `tokenParam`, `extraBody`, `agentName`,
 `frameMode` (`stream` or `snap`). Values are strings. Unknown fields, including `apiKey`, are rejected on both
@@ -63,6 +64,29 @@ curl -H "Authorization: Bearer $OPS_ADMIN_TOKEN" \
   -d '{"model":"your-vision-model","frameMode":"stream"}' \
   https://ops.example.com/api/config
 ```
+
+Telemetry's `app.frameAge` measures source capture age, not the time since JPEG decoding. Cached frames being
+replayed after reconnection are not fresh. `/api/frame.jpg` rejects an unavailable, damaged or stale screenshot.
+The iOS 15 app shows its last agent step separately from the changing BLE status. For provisioning by the
+owner's trusted BLE debugging client, it also accepts `app ops {"endpoint":"http://LAN_HOST:8787","token":"..."}`;
+never print or persist that command with the credential. The endpoint/token remain local to the phone.
+
+## Board LAN diagnostics (optional)
+
+This is separate from phone remote management. A trusted BLE/USB peer can run `monitor on` to open a
+15-minute, read-only HTTP window on port 3235. The reply contains the board's IP, port and random bearer
+credential. The listener starts **off** at every boot; `monitor off` closes it and a renewed window invalidates
+the previous credential. Use it only on a trusted LAN, never expose this HTTP port to the internet.
+
+- `GET /status`: board telemetry.
+- `GET /gop.h264`: SPS/PPS plus the cached decodable GOP, with `X-Board-Ms` and `X-Frame-Ms` headers.
+- Both require `Authorization: Bearer <window-credential>`; there is no network HID command endpoint.
+
+The desktop can fetch the full cache over Wi-Fi without subscribing to BLE video. This reduces BLE load and
+avoids replaying megabytes through BLE after each desktop reconnect. The client must bound capture age,
+including download/decode time, and reject truncated or corrupt downloads. A GOP replacement during the
+transfer deliberately aborts it; retry from the new IDR. No decodable GOP returns 503. This does not repair
+iOS background decoding, board brownouts, or the phone's BLE video transport.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.

@@ -31,6 +31,7 @@ targets:
       - IPhoneAgent/Services/Metrics.swift
       - IPhoneAgent/Services/DebugLog.swift
       - IPhoneAgent/Services/TraceStore.swift
+      - IPhoneAgent/Services/OpsController.swift
       - IPhoneAgent/Services/Redactor.swift
       - path: ../prompts
         type: folder
@@ -40,7 +41,10 @@ targets:
       properties:
         CFBundleDisplayName: ESP32 Agent 15
         CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "2"
+        CFBundleVersion: "3"
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: 连接局域网中的远程运维服务。
         NSBluetoothAlwaysUsageDescription: 连接开发板以接收屏幕画面并操作手机。
         UIBackgroundModes: [bluetooth-central]
         UIFileSharingEnabled: true

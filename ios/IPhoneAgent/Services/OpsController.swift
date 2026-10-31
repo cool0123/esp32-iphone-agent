@@ -1,11 +1,32 @@
 import Foundation
+import UIKit
+
+/// Shared by the full app and the iOS 15 app; no newer UI/framework dependency.
+@MainActor protocol OpsApp: AnyObject {
+    var settings: Settings { get }
+    var board: BoardLink { get }
+    var feed: VideoFeed { get }
+    var agent: AgentLoop { get }
+    var opsRecovering: Bool { get }
+    var opsNeedsHelp: Bool { get }
+    func setFrameMode(_ mode: FrameMode)
+    func say(_ text: String)
+    func stopAgent() async
+}
+
+#if !LEGACY_IOS
+extension AppModel: OpsApp {
+    var opsRecovering: Bool { recovering != nil }
+    var opsNeedsHelp: Bool { help != nil }
+}
+#endif
 
 /// Remote-management config whitelist. Model credentials and the management token are never included.
 @MainActor enum OpsConfig {
     static let keys: Set<String> = ["baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody",
                                     "agentName", "frameMode"]
 
-    static func get(_ app: AppModel) -> [String: Any] { get(app.settings, frameMode: FrameMode.current) }
+    static func get(_ app: any OpsApp) -> [String: Any] { get(app.settings, frameMode: FrameMode.current) }
 
     static func publicBaseURL(_ raw: String) -> String {
         guard var c = URLComponents(string: raw) else { return "" }
@@ -53,7 +74,7 @@ import Foundation
         return patch
     }
 
-    static func apply(_ params: [String: Any], to app: AppModel) throws -> [String: Any] {
+    static func apply(_ params: [String: Any], to app: any OpsApp) throws -> [String: Any] {
         let patch = try validated(params)
         let s = app.settings
         if let v = patch["baseURL"] { s.baseURL = v }
@@ -80,7 +101,7 @@ import Foundation
     @Published private(set) var state = "Off"
     let deviceID: String
 
-    private weak var app: AppModel?
+    private weak var app: (any OpsApp)?
     private let defaults: UserDefaults
     private let session: URLSession = .shared
     private var socket: URLSessionWebSocketTask?
@@ -89,7 +110,7 @@ import Foundation
     private let sendLock = AsyncLock()
     private var generation = 0
 
-    init(app: AppModel, defaults: UserDefaults = .standard) {
+    init(app: any OpsApp, defaults: UserDefaults = .standard) {
         self.app = app
         self.defaults = defaults
         endpoint = defaults.string(forKey: "opsEndpoint") ?? ""
@@ -145,7 +166,7 @@ import Foundation
         state = "Off"
     }
 
-    private func run(_ socket: URLSessionWebSocketTask, app: AppModel, generation gen: Int) async {
+    private func run(_ socket: URLSessionWebSocketTask, app: any OpsApp, generation gen: Int) async {
         do {
             socket.resume()
             state = "Connected"
@@ -178,6 +199,19 @@ import Foundation
         }
     }
 
+    func checkModel() async throws -> String {
+        guard let app else { throw DeviceError(message: "app unavailable") }
+        let client = try await app.settings.client("actor")
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 256, height: 256)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 256, height: 256))
+        }.jpegData(compressionQuality: 0.8)
+        let reply = try await client.chat(system: "Name the dominant color. Reply with one English word.",
+                                          text: "What color is this image?", image: image, maxTokens: 100, temperature: 0)
+        try ModelConnectionCheck.validate(reply)
+        return "model=\(client.model), image=red, reasoning_chars=\(reply.reasoningChars)"
+    }
+
     private func appVersion() -> String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
@@ -187,12 +221,14 @@ import Foundation
         var board: [String: Any] = [:]
         if let status = app.board.status, let data = try? JSONEncoder().encode(status),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { board = object }
-        let age = app.feed.updated > 0 ? max(0, now() - app.feed.updated) : -1
+        let age = app.feed.capturedAt > 0 ? max(0, now() - app.feed.capturedAt) : -1
         return ["type": "telemetry", "device": deviceID, "at": now(), "state": state,
                 "board": board,
                 "app": ["connected": app.board.connected, "mirroring": app.feed.mirroring, "frameAge": age,
                         "running": app.agent.running, "task": app.agent.task, "steps": app.agent.steps.count,
-                        "recovering": app.recovering != nil, "needsHelp": app.help != nil]]
+                        "recovering": app.opsRecovering, "needsHelp": app.opsNeedsHelp,
+                        "frameLive": app.feed.live, "decoderNote": app.feed.note,
+                        "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? ""]]
     }
 
     private func sendTelemetry(on socket: URLSessionWebSocketTask) async throws {
@@ -201,12 +237,16 @@ import Foundation
 
     private func send(_ object: [String: Any], on socket: URLSessionWebSocketTask) async throws {
         let data = try JSONSerialization.data(withJSONObject: object)
+        var text = String(decoding: data, as: UTF8.self)
+        for secret in [app?.settings.apiKey ?? "", token] where secret.count >= 6 {
+            text = text.replacingOccurrences(of: secret, with: "[redacted]")
+        }
         await sendLock.lock()
         defer { sendLock.unlock() }
-        try await socket.send(.string(String(decoding: data, as: UTF8.self)))
+        try await socket.send(.string(text))
     }
 
-    private func handle(_ message: [String: Any], app: AppModel, socket: URLSessionWebSocketTask) async {
+    private func handle(_ message: [String: Any], app: any OpsApp, socket: URLSessionWebSocketTask) async {
         guard message["type"] as? String == "command", let id = message["id"] as? String,
               let name = message["name"] as? String else { return }
         do {
@@ -218,8 +258,9 @@ import Foundation
             case "config.set": data = try OpsConfig.apply(params, to: app)
             case "logs.get": data = ["lines": DebugLog.tail(min(params["lines"] as? Int ?? 100, 200))]
             case "snapshot":
-                guard let jpeg = app.feed.frame else { throw DeviceError(message: "no screenshot available") }
+                guard app.feed.live, let jpeg = app.feed.frame else { throw DeviceError(message: "no fresh screenshot available") }
                 data = ["jpeg": jpeg.base64EncodedString(), "capturedAt": app.feed.capturedAt, "live": app.feed.live]
+            case "model.check": data = ["result": try await checkModel()]
             case "agent.stop":
                 await app.stopAgent()
                 data = ["stopped": true]

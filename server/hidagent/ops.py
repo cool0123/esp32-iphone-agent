@@ -221,6 +221,10 @@ def create_app(device_token: str | None = None, admin_token: str | None = None):
             raise HTTPException(502, "device returned an invalid frame")
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
+    @app.post("/api/model-check", dependencies=[Depends(admin)])
+    async def model_check():
+        return {"ok": True, "data": await hub.command("model.check", timeout=100)}
+
     @app.post("/api/stop", dependencies=[Depends(admin)])
     async def stop():
         return await result_data(hub, "agent.stop")

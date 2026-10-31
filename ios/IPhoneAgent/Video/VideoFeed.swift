@@ -82,7 +82,9 @@ extension ScreenSource {
         }
     }
 
-    var live: Bool { mirroring && frame != nil && (device?.connected ?? false) }
+    var live: Bool {
+        mirroring && frame != nil && !broken && capturedAt > 0 && now() - capturedAt < 3 && (device?.connected ?? false)
+    }
 
     /// Frame width / height (portrait iPhone as a fallback).
     var aspect: Double { size.width > 0 && size.height > 0 ? size.width / size.height : 9 / 19.5 }
@@ -100,7 +102,10 @@ extension ScreenSource {
     }
 
     /// The link (re)connected: chunk numbering starts over.
-    func resetStream() { assembler.reset(); clockOffset = nil }  // the board may have rebooted: its clock too
+    func resetStream() {
+        assembler.reset(); clockOffset = nil
+        frame = nil; updated = 0; capturedAt = 0; broken = false
+    }
 
     /// A board timestamp (status `up`, or a streamed unit) just arrived: keep the smallest offset.
     func boardClock(ms: Int) {
@@ -141,7 +146,7 @@ extension ScreenSource {
     @discardableResult
     func currentFrame(maxAge: Double = 1, wait: Double = 3) async throws -> String {
         if streamOn && mirroring && !broken {
-            if frame != nil && now() - updated < maxAge { return "live" }
+            if frame != nil && capturedAt > 0 && now() - capturedAt < maxAge { return "live" }
             if await fresh(since: now() - maxAge, timeout: wait) != nil, !broken { return "live (waited)" }
         }
         do {
@@ -150,7 +155,9 @@ extension ScreenSource {
             DebugLog.write("snap timed out; retrying once with a longer timeout")
             try await snap(timeout: snapTimeout * 1.5)
         }
-        if broken || frame == nil { throw BlindError() }
+        if broken || frame == nil || capturedAt <= 0 || now() - capturedAt >= maxAge {
+            throw BlindError(reason: "screen has not caught up to the present; operation cancelled")
+        }
         return "snap"
     }
 
@@ -213,5 +220,5 @@ extension ScreenSource {
     }
 
     /// The link dropped: the board forgets `stream on`.
-    func linkLost() { streamOn = false }
+    func linkLost() { streamOn = false; frame = nil; updated = 0; capturedAt = 0 }
 }
