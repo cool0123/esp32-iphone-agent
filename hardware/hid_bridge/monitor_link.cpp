@@ -37,6 +37,21 @@ static esp_err_t handle(httpd_req_t *req) {
   }
   gop_view view;
   if (!video_gop_open(&view)) return unavailable(req, "waiting for a decodable GOP");
+  size_t start = 0;
+  char query[80], gen[16], offset[16];
+  if (httpd_req_get_url_query_len(req)) {
+    if (httpd_req_get_url_query_str(req, query, sizeof query) != ESP_OK ||
+        httpd_query_key_value(query, "gen", gen, sizeof gen) != ESP_OK ||
+        httpd_query_key_value(query, "offset", offset, sizeof offset) != ESP_OK) {
+      return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "expected gen and offset");
+    }
+    char *endGen, *endOffset;
+    unsigned long wantedGen = strtoul(gen, &endGen, 10), wantedOffset = strtoul(offset, &endOffset, 10);
+    if (!gen[0] || !offset[0] || *endGen || *endOffset || gen[0] == '-' || offset[0] == '-') {
+      return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid cursor");
+    }
+    if (wantedGen == view.gen && wantedOffset <= view.bytes) start = wantedOffset;
+  }
   uint8_t *buf = (uint8_t *)heap_caps_malloc(16 * 1024, MALLOC_CAP_SPIRAM);
   if (!buf) return unavailable(req, "no snapshot memory");
   char stamp[16];
@@ -45,12 +60,21 @@ static esp_err_t handle(httpd_req_t *req) {
   char up[16];
   snprintf(up, sizeof up, "%lu", (unsigned long)millis());
   httpd_resp_set_hdr(req, "X-Board-Ms", up);
+  char generation[16], begin[16], bytes[16], config[16];
+  snprintf(generation, sizeof generation, "%lu", (unsigned long)view.gen);
+  snprintf(begin, sizeof begin, "%lu", (unsigned long)start);
+  snprintf(bytes, sizeof bytes, "%lu", (unsigned long)view.bytes);
+  snprintf(config, sizeof config, "%u", start == 0 ? (unsigned)view.cfg_len : 0);
+  httpd_resp_set_hdr(req, "X-Gop-Gen", generation);
+  httpd_resp_set_hdr(req, "X-Gop-Start", begin);
+  httpd_resp_set_hdr(req, "X-Gop-Bytes", bytes);
+  httpd_resp_set_hdr(req, "X-Gop-Config", config);
   httpd_resp_set_type(req, "video/h264");
-  esp_err_t result = httpd_resp_send_chunk(req, (const char *)view.cfg, view.cfg_len);
+  esp_err_t result = start == 0 ? httpd_resp_send_chunk(req, (const char *)view.cfg, view.cfg_len) : ESP_OK;
   uint32_t started = millis();
-  for (size_t offset = 0; result == ESP_OK && offset < view.bytes;) {
+  for (size_t offset = start; result == ESP_OK && offset < view.bytes;) {
     size_t len = min((size_t)16 * 1024, view.bytes - offset);
-    if (millis() - started > 5000 || !video_gop_read(&view, offset, buf, len)) {
+    if (millis() - started > 30000 || !video_gop_read(&view, offset, buf, len)) {
       result = ESP_FAIL;  // no chunk terminator: clients reject this truncated response
       break;
     }
