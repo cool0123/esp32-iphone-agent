@@ -73,7 +73,15 @@ flags: bit0 START of access unit, bit1 END of access unit, bit2 IDR, bit3 CONFIG
 bit4 BENCH (filler, ignore), bit5 SNAP (part of a snap reply).
 Payload is Annex-B (`00 00 00 01` start codes). On a START chunk the first 4 payload bytes are a u32 LE
 board timestamp (ms) for latency stats, followed by the Annex-B data.
-`seq` increments per notify; the app counts gaps as drops and waits for the next IDR/CONFIG after a gap.
+`seq` increments per notify; after a gap the app requires CONFIG as needed and a complete IDR before
+accepting dependent frames. CONFIG alone cannot restore reference pictures.
+
+The iOS client resets its decoder **before** enabling video notifications, rather than at the later encrypted
+network-read/link-ready callback: CONFIG or an IDR START may arrive before readiness. On a restored
+CoreBluetooth connection whose video characteristic is already notifying, the client first disables it and
+waits for that callback before resetting/re-enabling it, creating a subscription edge for prefix replay.
+This cannot recreate an IDR already missing from a P-only board history. Build 10 is installed; its restored
+subscription recovery has not yet passed a real-device test starting with a retained complete GOP.
 
 ## net (JSON)
 Read: `{"mode":"ap","ssid":"ESP32Agent-1A2B","pass":"<random 12 chars>","ip":"192.168.4.1"}`

@@ -297,5 +297,37 @@ disabled, radio preference is balance, OTA is off, and code CI `41247671118` suc
 The owner must restart mirroring to continue load/recovery tests. Evidence is in
 `build/event-recovery/startup-installed.json`; neither automatic keyframe recovery nor stable power has passed.
 
+**Current phone version is now 1.0.10 / build 10.** The owner's mirror restart restored a full fresh desktop
+on the LAN decoder, while the phone app was offline. A fresh-image-guided launch restored Ops, but its native
+decoder stayed blind after reconnect despite a still-complete GOP. Removing the second BLE central did not
+restore the image. One explicitly recorded desktop `stream off`/`stream on` diagnostic recovered native
+decoding from the existing IDR; source age fell from ~433 s to ~0.19 s. This was assisted recovery, not an
+independent phone recovery pass, and newly decoded history was not accepted as live.
+
+Build 9 moved decoder reset before subscription: the old link-ready reset could erase CONFIG/IDR data that
+arrived while the encrypted network read was completing. It added a regression through actual app callbacks
+for CONFIG/partial IDR before readiness and IDR completion afterward. All three build 9 workflows passed
+(100 simulator tests). Version 1.0.9 was installed, but real logs showed CoreBluetooth restoring an existing
+subscribed link without another prefix replay; **that recovery trial failed**. This was not a complete fix.
+
+Build 10 (`614161a3cd242f31e8ce1facf34784f70203b6b0`) also renews an already-notifying video subscription: disable,
+wait for its callback, reset the decoder and re-enable, requesting a prefix through a real subscription edge.
+Fresh subscriptions reset before enabling too; the later link-ready callback preserves early video. CI
+`41250191867` passed 100 tests and the iOS 15 build `41250191850` passed. Modern workflow `41250191840` also
+subsequently passed with 100 simulator tests and zero failures; all three workflows are green. Authentication hello confirms
+**1.0.10 is installed**. Unsigned IPA SHA256 `a83c0290cdab3a08baadd58bab0f3efc659dcfaf14e9972438cb6435d9467715`,
+signed SHA256 `0eac61e782a05eb8e68b6675bee688c406490b6862c2538898699af396fca789`. Configuration/Key persisted;
+the phone's official DeepSeek red-image check again passed with `reasoning_chars=0`.
+
+However, the old mirror history overflowed during installation: `ov=1,lcs=1,vwait=1`, IDR age ~1603 s before
+launch evidence. A newly started decoder cannot reconstruct the missing prefix. The phone still waits for a
+complete IDR; this is **not a build 10 restored-subscription recovery pass**. Nor does board `lcs=1` prove
+native phone decoding while that phone was blind. A new mirror session with a complete GOP is required for
+the next real-device recovery test. Firmware remains `Nov  1 2026 06:03:20`, `bo=22` did not increase during
+this round, experimental events remain disabled, radio preference is balance and OTA is off. Electrical root
+cause and long-term power stability remain unresolved. No autonomous action task ran this round; evidence
+is in `build/reconnect-recovery/verification.json`. Review was self-review; no independent second reviewer
+completion is claimed.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
