@@ -443,12 +443,14 @@ extension BoardLink: CBPeripheralDelegate {
             guard available.isSuperset(of: BoardUUID.all) else {
                 failConnection(String(localized: "Board firmware is missing required features. Update the firmware.")); return
             }
-            // The board can replay CONFIG/IDR as soon as video is subscribed, before the encrypted
-            // net read marks the link ready. Never erase that prefix in onLinkUp.
-            onLinkPreparing?()
             for c in service.characteristics ?? [] {
                 chars[c.uuid] = c
-                if [BoardUUID.reply, BoardUUID.status, BoardUUID.video].contains(c.uuid) { p.setNotifyValue(true, for: c) }
+                if c.uuid == BoardUUID.video {
+                    // A restored CoreBluetooth connection may already be subscribed, with the board
+                    // sending P-frames. A real off/on edge requests a complete prefix for this decoder.
+                    if c.isNotifying { p.setNotifyValue(false, for: c) }
+                    else { onLinkPreparing?(); p.setNotifyValue(true, for: c) }
+                } else if [BoardUUID.reply, BoardUUID.status].contains(c.uuid) { p.setNotifyValue(true, for: c) }
             }
         }
     }
@@ -457,6 +459,14 @@ extension BoardLink: CBPeripheralDelegate {
         MainActor.assumeIsolated {
             guard p === peripheral else { return }
             if let error { failConnection("subscribe \(c.uuid): \(error.localizedDescription)"); return }
+            if c.uuid == BoardUUID.video, !c.isNotifying, linking {
+                subscribed.remove(c.uuid)
+                // Reset before the board can deliver CONFIG or an IDR START, never at onLinkUp.
+                onLinkPreparing?()
+                log("video subscription renewed; waiting for complete reference chain")
+                p.setNotifyValue(true, for: c)
+                return
+            }
             guard c.isNotifying else { return }
             subscribed.insert(c.uuid)
             if !connected && subscribed.isSuperset(of: [BoardUUID.reply, BoardUUID.status, BoardUUID.video]) {
