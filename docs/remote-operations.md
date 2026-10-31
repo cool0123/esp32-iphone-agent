@@ -135,5 +135,18 @@ firmware build passed; OTA returned 0 and the board reported `bv="Nov  1 2026 02
 been tested with this patch. OTA/brownout can leave mirroring disconnected; the owner must reopen Screen
 Mirroring → ESP32 Agent. `resync` was observed to stop mirroring without automatic reconnection.
 
+Build 6 (`bd01471`) removes automatic whole-GOP snapshots from continuous streaming. If video falls behind
+while the actor replies, the agent waits for live video and discards that decision before looking again;
+explicit snapshot mode remains available. The iOS 15 build `41232551721`, iOS build/tests `41232551715`, and
+CI `41232551702` passed; the simulator ran 93 tests with zero failures. Build 6 was signed as 1.0.6, bundle
+build 6, but **has not completed system installation confirmation**. The phone still runs build 5.
+
+A subsequent build 5 independent task failed: desktop BLE and management were stopped for about 45 s, the
+phone clicked the home screen and opened search, then source lag caused two `snap` timeouts and historical
+replays. It did not open Calendar and was stopped (`running=false`, final step `stopped`). Separately,
+computer-controlled, visually verified AssistiveTouch → 主屏幕 did return home; this is not an independent task.
+During build 6 installation preparation, the board browned out again (`bo=18`, `ap=idle`), leaving no live
+screenshot. Input was refused, and mirroring must be reopened manually before installation and task acceptance.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
