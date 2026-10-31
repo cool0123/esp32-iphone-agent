@@ -16,6 +16,7 @@
 #define AP_AUDIO_DATA_PORT 7011
 #define AP_AUDIO_CTRL_PORT 7012
 #define AP_MIRROR_PORT 7100
+#define AP_EVENT_PORT 7013
 
 #define AP_MODEL "AppleTV3,2"
 #define AP_VERSION "220.68"
@@ -80,7 +81,11 @@ typedef struct {
 } ap_resp;
 
 typedef struct {
-  int fd;
+  int fd, event_fd;
+  uint32_t event_seq, event_deadline;
+  size_t event_len;
+  bool event_waiting;
+  char event_buf[1024];
   uint32_t remote_ip;  // network byte order
   uint8_t *buf;
   size_t len, cap;

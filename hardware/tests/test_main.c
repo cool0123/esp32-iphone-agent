@@ -5,6 +5,7 @@
 #include "../hid_bridge/src/bplist/bplist.h"
 #include "../hid_bridge/src/video/gop.h"
 #include "../hid_bridge/src/video/ring.h"
+#include "../hid_bridge/src/airplay/event_protocol.h"
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { fails++; printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -285,7 +286,54 @@ static void test_chunker(void) {
   CHECK(vchunk_next(&c, out, 20, 1) == 0);
 }
 
+static void test_event_reply(void) {
+  const char *ok = "HTTP/1.1 200 OK\r\nCSeq: 7\r\nContent-Length: 4\r\n\r\n";
+  char reply[1025];
+  size_t head = strlen(ok);
+  memcpy(reply, ok, head);
+  memcpy(reply + head, "\0\1\2\3", 4);  // binary plist replies can contain NUL
+  for (size_t n = 0; n < head + 4; n++) CHECK(ap_event_reply(reply, n, 7) == 0);
+  CHECK(ap_event_reply(reply, head + 4, 7) == (int)head + 4);
+  CHECK(ap_event_reply(reply, head + 4, 8) == -1);
+  const char *bad[] = {
+    "HTTP/1.1 500 Error\r\nCSeq: 7\r\n\r\n",
+    "HTTP/1.1 200 OK\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nCSeq: 7x\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nCSeq: 7\r\nCSeq: 7\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nCSeq: 7\r\nContent-Length: -1\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nCSeq: 7\r\nContent-Length: 999999999999999\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nCSeq: 7\r\nContent-Length: 1024\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nCSeq: 7\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nCSeq: 7\r\nTransfer-Encoding: chunked\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nbad\r\nCSeq: 7\r\n\r\n"
+  };
+  for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) CHECK(ap_event_reply(bad[i], strlen(bad[i]), 7) == -1);
+  memset(reply, 'x', sizeof reply);
+  CHECK(ap_event_reply(reply, 1023, 7) == 0);
+  CHECK(ap_event_reply(reply, 1024, 7) == -1);
+  CHECK(ap_event_reply(reply, 1025, 7) == -1);
+  const char *empty = "RTSP/1.0 200 OK\r\nCSeq: 7\r\n\r\n";
+  CHECK(ap_event_reply(empty, strlen(empty), 7) == (int)strlen(empty));
+}
+
+static void test_gop_recovery(void) {
+  gop_recovery r = {0};
+  CHECK(!gop_recovery_due(&r, 1, 1, 0, false));
+  CHECK(gop_recovery_due(&r, 1, 1, 0, true));
+  CHECK(!gop_recovery_due(&r, 1, 1, 4999, true));
+  CHECK(gop_recovery_due(&r, 1, 1, 5000, true));
+  CHECK(gop_recovery_due(&r, 1, 1, 10000, true));
+  CHECK(!gop_recovery_due(&r, 1, 1, 15000, true));
+  CHECK(gop_recovery_due(&r, 2, 1, 15001, true)); // new IDR/history generation
+  CHECK(gop_recovery_due(&r, 2, 2, UINT32_MAX - 100, true)); // new subscriber
+  CHECK(!gop_recovery_due(&r, 2, 2, 100, true));
+  CHECK(gop_recovery_due(&r, 2, 2, 4900, true)); // millis wrap
+  CHECK(!gop_recovery_due(&r, 3, 3, 9900, false)); // healthy continuity never requests
+}
+
 int main(void) {
+  test_event_reply();
+  test_gop_recovery();
   test_bplist_roundtrip();
   test_bplist_utf16();
   test_bplist_overflow();

@@ -194,7 +194,7 @@ static void setup_session(ap_conn *c, bp_reader *r, int top, bp_writer *w, int r
   bp_get_string(r, bp_dict_get(r, top, "name"), name, sizeof name);
   ap_log("setup: session from %s (%s), timing port %u", name, model, (unsigned)port);
   bp_w_set(w, root, "timingPort", bp_w_uint(w, AP_TIMING_PORT));
-  bp_w_set(w, root, "eventPort", bp_w_uint(w, 0));
+  bp_w_set(w, root, "eventPort", bp_w_uint(w, AP_EVENT_PORT));
 }
 
 static void handle_setup(ap_conn *c, const ap_req *req, ap_resp *res) {

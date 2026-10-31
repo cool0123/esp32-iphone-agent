@@ -16,6 +16,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <stdatomic.h>
+#include "event_protocol.h"
+#include "../bplist/bplist.h"
 #include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,6 +30,28 @@
 airplay_cfg ap_cfg;
 static ap_conn conns[MAX_CONNS];
 static void close_conn(ap_conn *c);
+static atomic_bool keyframe_pending, event_ready, drop_pending;
+static atomic_uint_least32_t keyframe_sent, keyframe_acked, keyframe_failed;
+
+bool airplay_request_keyframe(void) {
+  if (!atomic_exchange(&event_ready, false)) return false;
+  atomic_store(&keyframe_pending, true);
+  return true;
+}
+
+void airplay_keyframe_stats(uint32_t *sent, uint32_t *acked, uint32_t *failed) {
+  *sent = atomic_load(&keyframe_sent);
+  *acked = atomic_load(&keyframe_acked);
+  *failed = atomic_load(&keyframe_failed);
+}
+
+static void close_event(ap_conn *c) {
+  if (c->event_waiting) atomic_fetch_add(&keyframe_failed, 1);
+  if (c->event_fd >= 0) close(c->event_fd);
+  c->event_fd = -1;
+  c->event_waiting = false;
+  c->event_len = 0;
+}
 
 void ap_log(const char *fmt, ...) {
   if (!ap_cfg.log) return;
@@ -57,11 +82,8 @@ int airplay_state(void) {
 }
 
 void airplay_drop_sessions(void) {
-  // iOS sends one IDR when a mirroring session starts and only P frames afterwards, so a decoder that
-  // starts later has nothing to lock on to. Closing the RTSP connections forces the phone to negotiate
-  // a new session, which begins with a fresh IDR.
-  for (int i = 0; i < MAX_CONNS; i++)
-    if (conns[i].fd >= 0) close_conn(&conns[i]);
+  // Serialize teardown with RTSP/event I/O. Closing may stop iOS mirroring entirely.
+  atomic_store(&drop_pending, true);
 }
 
 static bool send_all(int fd, const void *p, size_t n) {
@@ -75,15 +97,56 @@ static bool send_all(int fd, const void *p, size_t n) {
   return true;
 }
 
+static void send_keyframe(ap_conn *c) {
+  bp_writer w;
+  bp_writer_init(&w);
+  int root = bp_w_dict(&w);
+  bp_w_set(&w, root, "type", bp_w_string(&w, "forceKeyFrame"));
+  size_t len = 0;
+  uint8_t *body = bp_w_finish(&w, &len);
+  bp_writer_free(&w);
+  if (!body) { atomic_fetch_add(&keyframe_failed, 1); return; }
+  char head[256];
+  int n = snprintf(head, sizeof head,
+                   "POST /command HTTP/1.1\r\nCSeq: %lu\r\nContent-Type: application/x-apple-binary-plist\r\n"
+                   "Content-Length: %u\r\n\r\n", (unsigned long)++c->event_seq, (unsigned)len);
+  bool ok = n > 0 && n < (int)sizeof head && send_all(c->event_fd, head, n) && send_all(c->event_fd, body, len);
+  free(body);
+  if (!ok) { atomic_fetch_add(&keyframe_failed, 1); close_event(c); return; }
+  atomic_fetch_add(&keyframe_sent, 1);
+  c->event_waiting = true;
+  c->event_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(2000);
+  ap_log("event: forceKeyFrame sent");
+}
+
+static void read_event(ap_conn *c) {
+  if (!c->event_waiting) { close_event(c); return; }
+  int n = recv(c->event_fd, c->event_buf + c->event_len, sizeof c->event_buf - c->event_len, 0);
+  if (n <= 0) { close_event(c); return; }
+  c->event_len += n;
+  int result = ap_event_reply(c->event_buf, c->event_len, c->event_seq);
+  if (result < 0) { close_event(c); return; }
+  if (result > 0) {
+    if ((size_t)result != c->event_len) { close_event(c); return; }
+    atomic_fetch_add(&keyframe_acked, 1);
+    c->event_waiting = false;
+    c->event_len = 0;
+    ap_log("event: forceKeyFrame acknowledged (new IDR still required)");
+  }
+}
+
 static void close_conn(ap_conn *c) {
   if (ap_mirror_owner == c) {
+    atomic_store(&keyframe_pending, false);
+    atomic_store(&event_ready, false);
     ap_mirror_stop();
     ap_mirror_owner = NULL;
   }
+  close_event(c);
   close(c->fd);
   free(c->buf);
   memset(c, 0, sizeof *c);
-  c->fd = -1;
+  c->fd = c->event_fd = -1;
   ap_log("rtsp: connection closed");
 }
 
@@ -169,19 +232,64 @@ static void server_task(void *arg) {
     ap_log("rtsp: cannot listen on %d", AP_RTSP_PORT);
     vTaskDelete(NULL);
   }
-  for (int i = 0; i < MAX_CONNS; i++) conns[i].fd = -1;
+  int efd = socket(AF_INET, SOCK_STREAM, 0);
+  a.sin_port = htons(AP_EVENT_PORT);
+  setsockopt(efd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+  if (bind(efd, (struct sockaddr *)&a, sizeof a) || listen(efd, 2)) {
+    close(efd); close(lfd);
+    ap_log("rtsp: cannot listen on event port %d", AP_EVENT_PORT);
+    vTaskDelete(NULL);
+    return;
+  }
+  for (int i = 0; i < MAX_CONNS; i++) conns[i].fd = conns[i].event_fd = -1;
   for (;;) {
+    if (atomic_exchange(&drop_pending, false))
+      for (int i = 0; i < MAX_CONNS; i++) if (conns[i].fd >= 0) close_conn(&conns[i]);
+    if (atomic_exchange(&keyframe_pending, false)) {
+      ap_conn *c = ap_mirror_owner;
+      if (c && c->event_fd >= 0 && !c->event_waiting) send_keyframe(c);
+      else atomic_fetch_add(&keyframe_failed, 1);
+    }
+    for (int i = 0; i < MAX_CONNS; i++)
+      if (conns[i].event_waiting && (int32_t)(xTaskGetTickCount() - conns[i].event_deadline) >= 0)
+        close_event(&conns[i]);
+    atomic_store(&event_ready, ap_mirror_owner && ap_mirror_owner->event_fd >= 0 &&
+                 !ap_mirror_owner->event_waiting && !atomic_load(&keyframe_pending));
     fd_set rf;
     FD_ZERO(&rf);
     FD_SET(lfd, &rf);
-    int maxfd = lfd;
-    for (int i = 0; i < MAX_CONNS; i++)
+    FD_SET(efd, &rf);
+    int maxfd = lfd > efd ? lfd : efd;
+    for (int i = 0; i < MAX_CONNS; i++) {
+      if (conns[i].event_fd >= 0) {
+        FD_SET(conns[i].event_fd, &rf);
+        if (conns[i].event_fd > maxfd) maxfd = conns[i].event_fd;
+      }
       if (conns[i].fd >= 0) {
         FD_SET(conns[i].fd, &rf);
         if (conns[i].fd > maxfd) maxfd = conns[i].fd;
       }
-    struct timeval tv = {1, 0};
+    }
+    struct timeval tv = {0, 100000};
     if (select(maxfd + 1, &rf, NULL, NULL, &tv) <= 0) continue;
+    if (FD_ISSET(efd, &rf)) {
+      struct sockaddr_in peer = {0};
+      socklen_t pl = sizeof peer;
+      int fd = accept(efd, (struct sockaddr *)&peer, &pl);
+      ap_conn *owner = NULL;
+      int matches = 0;
+      for (int i = 0; i < MAX_CONNS; i++)
+        if (conns[i].fd >= 0 && conns[i].have_aes && conns[i].remote_ip == peer.sin_addr.s_addr) {
+          owner = &conns[i]; matches++;
+        }
+      if (fd >= 0 && matches == 1 && owner->event_fd < 0) {
+        struct timeval timeout = {0, 200000};
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+        owner->event_fd = fd;
+        ap_log("event: session connection accepted");
+      } else if (fd >= 0) close(fd);
+    }
     if (FD_ISSET(lfd, &rf)) {
       struct sockaddr_in peer;
       socklen_t pl = sizeof peer;
@@ -194,13 +302,16 @@ static void server_task(void *arg) {
       } else if (fd >= 0) {
         memset(c, 0, sizeof *c);
         c->fd = fd;
+        c->event_fd = -1;
         c->remote_ip = peer.sin_addr.s_addr;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
         ap_log("rtsp: connection from %s", inet_ntoa(peer.sin_addr));
       }
     }
-    for (int i = 0; i < MAX_CONNS; i++)
+    for (int i = 0; i < MAX_CONNS; i++) {
+      if (conns[i].event_fd >= 0 && FD_ISSET(conns[i].event_fd, &rf)) read_event(&conns[i]);
       if (conns[i].fd >= 0 && FD_ISSET(conns[i].fd, &rf) && !read_conn(&conns[i])) close_conn(&conns[i]);
+    }
   }
 }
 
@@ -212,7 +323,7 @@ void airplay_set_display(uint16_t width, uint16_t height, uint8_t max_fps) {
 
 bool airplay_start(const airplay_cfg *cfg) {
   ap_cfg = *cfg;
-  for (int i = 0; i < MAX_CONNS; i++) conns[i].fd = -1;
+  for (int i = 0; i < MAX_CONNS; i++) conns[i].fd = conns[i].event_fd = -1;
   if (!ap_crypto_init(cfg->ed25519_seed)) return false;
   if (!ap_mdns_start()) ap_log("mdns: advertising failed");
   return xTaskCreatePinnedToCore(server_task, "rtsp", 12 * 1024, NULL, 5, NULL, 0) == pdPASS;

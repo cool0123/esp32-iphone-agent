@@ -233,5 +233,22 @@ During later evidence collection build 8 also crossed one history overflow with 
 with no decoder warning. Build 7 and build 8 each now have one caught-up phone overflow example. Cold/lagging
 client recovery, long-term power stability and broader task reliability remain unresolved.
 
+An additional firmware recovery experiment now advertises the reverse event channel at TCP 7013 and can
+send a binary-plist `{type:forceKeyFrame}` command without tearing down mirroring. BLE `keyframe` queues it;
+`keyframe status` reports sent/acked/failed/idr_age separately from the MTU-limited heartbeat. Cold/lagging
+stream recovery makes at most three attempts per generation/subscriber, at least 5 s apart, preserving exact
+continuation and source-age guards. Event replies are bounded and checked for matching CSeq/full framing;
+event rejection/timeout leaves the RTSP control session alive. Session closure is now serialized on the RTSP
+task. The protocol idea is supported by [related AirPlay/CarPlay implementation notes](https://github.com/lvalen91/carlink_linux/blob/main/docs/CARPLAY_CAPABILITIES.md#9-control-commands--events-sdk-path-command),
+**not yet by this iOS 15 handset**.
+
+Host ASan/UBSan tests, a real-code TCP event integration harness (mock crypto/media/initial handshake), and the
+full firmware build passed. OTA returned 0 and the board actually reports `Nov  1 2026 05:39:51`; binary SHA256
+`aa73f00a0601362cd520f0e3ad9802d0fb1310a9f48332f923768b2e65629a54`. Low-voltage reset count nevertheless rose
+**18→19 during OTA**, so power stability remains unresolved. After deployment the phone remains on 1.0.8 with
+the task stopped, USB is healthy, and AirPlay is idle. Keyframe counters are all zero and a request correctly
+fails with `no ready event channel`. The owner must restart mirroring once before real event-channel/IDR and
+cold/lagging decoder tests can proceed. Neither a queued command nor a 2xx ACK alone establishes recovery.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.

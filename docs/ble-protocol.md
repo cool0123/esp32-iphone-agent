@@ -23,6 +23,14 @@ Existing HID commands, unchanged semantics from the old TCP protocol:
 New:
 - `stream on|off` — continuously forward every access unit over `video` (default off).
 - `snap` — send SPS/PPS + every AU since the last IDR (the current GOP), then reply `ok`.
+- `keyframe [status]` — queue `forceKeyFrame` over the current session's reverse event connection (TCP 7013),
+  or read `sent/acked/failed/idr_age` counters. `ok queued` and an event 2xx reply do **not** prove recovery:
+  require a new actual IDR and a complete fresh decoded image. No HID or session teardown is involved.
+  Automatic stream recovery attempts are limited to three per GOP generation/subscriber, at least 5 s apart;
+  a healthy decoder continuing exactly across an overflow does not request a keyframe. Phone compatibility
+  must be verified on real hardware; this path originates from related AirPlay/CarPlay implementations.
+- `resync` — queue session closure on the RTSP task. iOS may stop mirroring completely; it is not an
+  automatic reconnect/keyframe guarantee.
 - `res W H` — AirPlay resolution advertised in `/info` (default 480 1040), stored in NVS; takes effect on the next mirroring session.
 - `fps N` — max fps advertised (default 5), stored in NVS.
 - `bench KB` — send KB kilobytes of filler on `video` with the `bench` flag, then reply `ok <ms>`.
@@ -47,8 +55,9 @@ When the link drops, the board releases all buttons/keys (same as before).
 
 Send priority: replies and status are queued and always go out before further video; video keeps at most
 ~8 ACL packets (~2 KB) in the controller, so a reply waits behind at most that much video. In `stream on`,
-a P-frame more than 800 ms old is skipped and the stream resumes at the next IDR (a slow link degrades to
-IDR-only instead of building latency).
+every dependent frame must arrive in order; failed sends invalidate the cursor and restart from a complete
+GOP when one exists. If the history is P-only, the receiver waits for a new actual IDR; old P-frames are not
+made independently decodable by retimestamping or skipping frames.
 
 ## video
 Each notify: `[seq u16 LE][flags u8][payload]`, payload up to MTU-3-3 bytes.

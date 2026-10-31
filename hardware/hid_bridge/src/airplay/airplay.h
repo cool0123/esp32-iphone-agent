@@ -38,7 +38,11 @@ void airplay_mdns_stop(void);
 bool airplay_mdns_start_again(void);
 // Display advertised in /info from the next mirroring session on.
 void airplay_set_display(uint16_t width, uint16_t height, uint8_t max_fps);
-// Close the RTSP connections so iOS starts a new mirroring session (and sends a fresh IDR).
+// Queue a bounded, non-HID forceKeyFrame command on the authenticated session's event channel.
+// Acceptance is not proof of a new IDR; inspect video timestamps/decoder health separately.
+bool airplay_request_keyframe(void);
+void airplay_keyframe_stats(uint32_t *sent, uint32_t *acked, uint32_t *failed);
+// Close RTSP connections. iOS may stop mirroring rather than reconnect automatically.
 void airplay_drop_sessions(void);
 
 #ifdef __cplusplus

@@ -47,6 +47,16 @@ int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t t
   return g->n++;
 }
 
+bool gop_recovery_due(gop_recovery *r, uint32_t gen, uint32_t epoch, uint32_t ms, bool needed) {
+  if (!needed) return false;
+  if (r->gen != gen || r->epoch != epoch) {
+    r->gen = gen; r->epoch = epoch; r->attempts = 0;
+  }
+  if (r->attempts >= 3 || (r->attempts && (uint32_t)(ms - r->at) < 5000)) return false;
+  r->attempts++; r->at = ms;
+  return true;
+}
+
 bool gop_can_continue(const gop_buf *g, uint32_t sent_gen, int sent_n) {
   return g->wait_idr && g->stream_only && sent_gen != UINT32_MAX &&
          g->gen == sent_gen + 1 && sent_n == g->previous_n;

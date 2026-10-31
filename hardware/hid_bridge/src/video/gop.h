@@ -41,6 +41,12 @@ int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t t
 // A live decoder may cross one history overflow only after sending every AU of that generation.
 // Caller holds the GOP lock; a new subscriber or failed send must use UINT32_MAX as sent_gen.
 bool gop_can_continue(const gop_buf *g, uint32_t sent_gen, int sent_n);
+// At most three recovery attempts per generation/subscriber, five seconds apart.
+typedef struct {
+  uint32_t gen, epoch, at;
+  unsigned attempts;
+} gop_recovery;
+bool gop_recovery_due(gop_recovery *r, uint32_t gen, uint32_t epoch, uint32_t ms, bool needed);
 // True if the Annex-B data contains an IDR slice (NAL type 5).
 bool annexb_has_idr(const uint8_t *p, size_t len);
 // Rewrites AVCC (4-byte big-endian length prefixes) in place into Annex-B start codes.

@@ -150,7 +150,18 @@ String board(const String &line, const String &id) {
     return "ok";
   }
   if (cmd == "snap") { video_snap(id); return ""; }  // replies when the GOP is sent
-  if (cmd == "resync") {  // new mirroring session, so a decoder can start from its IDR
+  if (cmd == "keyframe") {
+    if (arg == "status") {
+      uint32_t sent, acked, failed;
+      airplay_keyframe_stats(&sent, &acked, &failed);
+      VideoStats v = video_stats();
+      return String("ok {\"sent\":") + sent + ",\"acked\":" + acked + ",\"failed\":" + failed +
+             ",\"idr_age\":" + v.idr_age + "}";
+    }
+    if (arg.length()) return "err usage: keyframe [status]";
+    return airplay_request_keyframe() ? "ok queued (new IDR required)" : "err no ready event channel";
+  }
+  if (cmd == "resync") {  // closes sessions; the owner may need to restart mirroring manually
     airplay_drop_sessions();
     return "ok";
   }

@@ -5,6 +5,7 @@
 #include "src/video/ring.h"
 #include "ble_link.h"
 #include "src/video/gop.h"
+#include "src/airplay/airplay.h"
 
 // GOP since the latest IDR; overflow drops it until the next IDR. A still screen gets an IDR only every
 // few minutes, so room for ~27 min of AUs at 5 fps (P-frames of a still screen are tiny).
@@ -129,6 +130,7 @@ static void streamStep() {
   static uint32_t txGen = UINT32_MAX;
   static uint32_t subscriberEpoch;
   static int next;
+  static gop_recovery recovery;
   uint32_t epoch = ble_video_epoch();
   if (epoch != subscriberEpoch) {
     subscriberEpoch = epoch;
@@ -137,6 +139,7 @@ static void streamStep() {
   static uint8_t cfg[GOP_CFG_MAX];
   if (!streaming || !ble_video_room()) {
     txGen = UINT32_MAX;  // resend config + whole GOP when streaming resumes
+    recovery = {};
     return;
   }
   uint32_t gen, cfg_ts;
@@ -149,8 +152,11 @@ static void streamStep() {
   cfg_ts = gop.cfg_ts;
   bool onlyP = gop.wait_idr && gop.stream_only;
   bool canContinue = gop_can_continue(&gop, txGen, next);
+  bool needsKeyframe = (gop.wait_idr && gen != txGen && !canContinue) ||
+                       (txGen == UINT32_MAX && gop.used > SNAP_MAX_BYTES);
   memcpy(cfg, gop.cfg, cfg_len);
   xSemaphoreGive(lock);
+  if (gop_recovery_due(&recovery, gen, epoch, millis(), needsKeyframe)) airplay_request_keyframe();
   if (!n || !cfg_len) return;
   if (gen != txGen) {
     if (onlyP) {
