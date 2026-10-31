@@ -178,5 +178,36 @@ and **97 simulator tests with zero failures**. The separate iOS build `412380523
 its duplicate simulator job is still running. Build 7 has not been signed or installed; the phone remains on 1.0.6, both current
 screens are unavailable, and AllSign's wireless service is offline. Manual mirroring recovery is required.
 
+Later validation supersedes the pending build 7 status above: `41238052376` passed, and the owner reopened
+mirroring. Build 7 was signed, installed and launched; authenticated hello reported **1.0.7** at
+`2026-10-31T20:34:38.377Z`. Its signed IPA SHA256 is
+`43fc3dfa7bab2fc60c9f86314a5f56ff7a4a69b1d3e561b87e47f1fbc7a1d720`. The retained Key/configuration and phone
+red-image model check passed again. Historical video caught up to about 0.13 s source age after desktop BLE
+was disconnected; newly decoded historical frames were never treated as live.
+
+With the computer only setting up the first Home Screen page, the phone prepared the original task at
+`2026-10-31T20:43:25.762Z`. Desktop BLE/probe/Ops were stopped, with the disconnected window starting at
+`20:43:28.153Z` for 55 s; only Ops was restored afterward. The phone opened Calendar, used separate
+AssistiveTouch/Home taps, and returned Home, but reopened Calendar instead of finishing. It was stopped,
+and final telemetry confirmed `running=false,lastStep=stopped`. **The complete independent task still failed.**
+Source-frame waiting ran on-device without automatic whole-GOP snapshots. The actor's requests discarded
+all earlier visual observations, leaving action coordinates but no memory that Calendar had been seen.
+
+The same caught-up phone decoder subsequently crossed **one history overflow successfully**: `ov:1→2`,
+`lcs:0→1`, unchanged IDR time `2448672`, `bo=18`, and unchanged BLE drop count 2. Authenticated native screenshots
+before/after were complete with the desktop clock advancing, `frameLive=true`, source age about 0.14 s and
+no decode warning. This is stronger evidence than `lcs` alone, but does not validate lagging/cold-client
+recovery. After overflow a new desktop decoder cannot start from the remaining P-only history.
+
+Build 8 (`090b239`) retains up to eight prior image-backed model observations (300 characters each), separately
+from action feedback. They are labeled historical, the current image remains authoritative, and returning
+to an earlier screen must not reset task progress. This does not hardcode Calendar or auto-accept the task.
+iOS 15 `41240758313`, modern iOS `41240758258` and CI `41240758290` all passed; both simulator jobs ran **99 tests
+with zero failures**. The original IPA SHA256 is `532155f30b16af3087135a64fbfbde37db56d30749327d4a96c3102a5d347b1f`.
+The signed phone package is `Signed/ESP32-Agent15-v1.0.8.ipa`, SHA256
+`ab9bfa2ac26a3663cef48f950bcc2662f3ce9323ba7d655387af0c5492c83193` (430048 bytes). **Build 8 is not installed**:
+the phone remains on 1.0.7 with a live native stream, stopped task and AllSign wireless enabled. The owner must
+reopen mirroring in portrait to restore the desktop decoder before replacement and real-device acceptance.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
