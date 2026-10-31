@@ -66,7 +66,11 @@ curl -H "Authorization: Bearer $OPS_ADMIN_TOKEN" \
 ```
 
 Telemetry's `app.frameAge` measures source capture age, not the time since JPEG decoding. Cached frames being
-replayed after reconnection are not fresh. `/api/frame.jpg` rejects an unavailable, damaged or stale screenshot.
+replayed after reconnection are not fresh. `/api/frame.jpg` rejects an unavailable or stale screenshot.
+Build 4 also invalidates the reference chain on CONFIG, packet loss, reconnect or decoder failure, waits for
+a complete IDR, and rejects callbacks from older stream generations. A successful decode alone is not proof
+of image integrity; the build 3 true-device test exposed mixed historical/current reference pictures despite
+fresh timestamps, so it must not be used to certify autonomous tasks.
 The iOS 15 app shows its last agent step separately from the changing BLE status. For provisioning by the
 owner's trusted BLE debugging client, it also accepts `app ops {"endpoint":"http://LAN_HOST:8787","token":"..."}`;
 never print or persist that command with the credential. The endpoint/token remain local to the phone.
@@ -92,8 +96,10 @@ the previous credential. Use it only on a trusted LAN, never expose this HTTP po
 
 The desktop can fetch the initial cache over Wi-Fi and then only new bytes, without subscribing to BLE video.
 A first true-device test exposed that repeatedly downloading the full cache exceeded the 3 s freshness bound
-as the GOP grew (about 4 s at 0.5 MB); incremental downloads address that measured bottleneck. They still need
-true-device acceptance after deployment. The desktop keeps one strict low-delay ffmpeg decoder alive, checks
+as the GOP grew (about 4 s at 0.5 MB); incremental downloads address that measured bottleneck. True-device
+protocol v3 testing subsequently followed over 15000 pictures and two GOP-cache overflows with source age
+usually around 0.1–1.1 s, without restarting the decoder. Static landscape screens can send only intermittent
+frames; the 3 s input gate still applies and must not be bypassed. The desktop keeps one strict low-delay ffmpeg decoder alive, checks
 that every expected picture was decoded, and clears the capture on a decode failure. Its capture worker polls
 continuously so the decoder stays ready; reading a cached JPEG does not refresh its source capture time.
 Credential renewal preserves the decoder and byte cursor. This reduces BLE load and
@@ -101,6 +107,15 @@ avoids replaying megabytes through BLE after each desktop reconnect. The client 
 including download/decode time, and reject truncated or corrupt downloads. A GOP replacement during the
 transfer deliberately aborts it; retry from the new IDR. No decodable GOP returns 503. This does not repair
 iOS background decoding, board brownouts, or the phone's BLE video transport.
+
+## iOS 15 acceptance evidence (2026-10-31)
+
+The operations build and build 4 (signed as version 1.0.4) were installed on iPhone9,4 / iOS 15.8.8. The phone
+connected to the authenticated LAN service on port 3233, preserved its Keychain credential across upgrades,
+and itself returned `model=deepseek-flash, image=red, reasoning_chars=0` from `/api/model-check` using the
+saved official DeepSeek endpoint and explicit `thinking.type=disabled`. This proves the model credential and
+fixed-image request; it does not prove an autonomous screen task or reliable background video. The latter
+remain unaccepted pending fresh, visually intact phone screenshots and an actual completed task.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
