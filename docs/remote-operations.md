@@ -233,8 +233,8 @@ During later evidence collection build 8 also crossed one history overflow with 
 with no decoder warning. Build 7 and build 8 each now have one caught-up phone overflow example. Cold/lagging
 client recovery, long-term power stability and broader task reliability remain unresolved.
 
-An additional firmware recovery experiment now advertises the reverse event channel at TCP 7013 and can
-send a binary-plist `{type:forceKeyFrame}` command without tearing down mirroring. BLE `keyframe` queues it;
+The first firmware recovery experiment advertised the reverse event channel at TCP 7013 and attempted to
+send a binary-plist `{type:forceKeyFrame}` command without directly closing the mirror connection. BLE `keyframe` queues it;
 `keyframe status` reports sent/acked/failed/idr_age separately from the MTU-limited heartbeat. Cold/lagging
 stream recovery makes at most three attempts per generation/subscriber, at least 5 s apart, preserving exact
 continuation and source-age guards. Event replies are bounded and checked for matching CSeq/full framing;
@@ -249,6 +249,37 @@ full firmware build passed. OTA returned 0 and the board actually reports `Nov  
 the task stopped, USB is healthy, and AirPlay is idle. Keyframe counters are all zero and a request correctly
 fails with `no ready event channel`. The owner must restart mirroring once before real event-channel/IDR and
 cold/lagging decoder tests can proceed. Neither a queued command nor a 2xx ACK alone establishes recovery.
+
+**The subsequent real-device keyframe trial failed.** After the owner restarted mirroring, the phone had a
+complete fresh native image (`frameAge≈0.083 s`) and the board was streaming. One request produced
+`sent=1,acked=0,failed=1`, no new IDR, and was followed within about one second by `ap=idle`; it remained idle
+at the ten-second check. The board did not reboot and `bo=19` stayed unchanged. There is no raw wire reply
+establishing whether the command, encryption/framing, or event-connection closure ended the source session.
+Host tests do not model an iPhone's decision to stop its mirror session.
+
+The experiment is now **disabled by default** (`AIRPLAY_EXPERIMENTAL_KEYFRAME=0`): no event listener,
+`eventPort=0`, explicit requests return `experimental keyframes disabled`, and automatic recovery cannot send.
+`keyframe status` includes `enabled`; enabling the experiment requires a separate developer build. Tests now
+cover both the default disabled protocol and the explicit experimental build, without removing original wire
+assertions. To reduce current peaks, BLE default TX was separately lowered from 9 to 0 dBm after phone RSSI
+measurements around -24..-35 dBm; `ble.tx` reads the controller value. This does not establish electrical root
+cause or long-term supply stability. Cold/P-only recovery remains unresolved.
+
+The disabled-event/0 dBm build **is installed**: board version `Nov  1 2026 06:00:25`, SHA256
+`65ae568d612bc5c7f8d8ae3383c64c52242bd99589932872a25c8e20ac92a526`, runtime `enabled=false,ble.tx=0` and no TCP
+7013 listener. That OTA nevertheless raised `bo:19→20`. Subsequent phone RSSI was around -33..-44 dBm.
+
+A further USB startup guard **is built but not installed**: wait up to 3 s for USB configuration, then 250 ms
+settling before starting RF, with `power status` diagnostics and a bounded hostless fallback. The core OTA
+receive-gap timeout was raised from 1 to 10 s. Firmware is 1,535,115 bytes, globals 101,316 bytes, SHA256
+`4d51217e24ccfd0073faa53d020bad3eb63eb5760f9c0ffdaf9ba7a4258149e4`. Host sanitizer/wire tests and the full build
+passed. Four startup-guard upload attempts failed mid-transfer: three used the earlier `7feb1529…` build
+(two normal, diagnostic); only the last Wi-Fi-priority trial included the 10 s timeout/latest hash. Diagnostics showed
+peer EOF before the uploader's Broken pipe/timeout. No board error code establishes the cause. Uptime remained
+continuous and a direct BLE read confirmed `bo=20`, the old version, and `power status` unsupported. Temporary
+radio preference and the OTA window were restored with confirmed `coex balance` / `ota off`. The next step is
+a fresh board power cycle before another update, then mirroring only after deployment is confirmed. The phone
+remains on 1.0.8 with its task stopped. Keyframe/cold recovery and long-term power stability have not passed.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.

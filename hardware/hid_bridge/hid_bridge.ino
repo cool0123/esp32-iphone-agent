@@ -30,6 +30,8 @@ const long MOVE_LIMIT = 4096;  // worst case ~3.3 s, safely below the 8 s watchd
 #endif
 
 const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the board instead of staying offline
+static uint32_t usbBootWaitMs;
+static bool usbConfiguredAtBoot;
 
 USBHIDMouse mouse;
 USBHIDKeyboard keyboard;
@@ -150,15 +152,22 @@ String board(const String &line, const String &id) {
     return "ok";
   }
   if (cmd == "snap") { video_snap(id); return ""; }  // replies when the GOP is sent
+  if (cmd == "power") {
+    if (arg.length() && arg != "status") return "err usage: power [status]";
+    return String("ok {\"usb_boot_configured\":") + (usbConfiguredAtBoot ? "true" : "false") +
+           ",\"usb_wait_ms\":" + usbBootWaitMs + ",\"ble_tx_dbm\":" + ble_tx_power() + "}";
+  }
   if (cmd == "keyframe") {
     if (arg == "status") {
       uint32_t sent, acked, failed;
       airplay_keyframe_stats(&sent, &acked, &failed);
       VideoStats v = video_stats();
-      return String("ok {\"sent\":") + sent + ",\"acked\":" + acked + ",\"failed\":" + failed +
+      return String("ok {\"enabled\":") + (airplay_event_port() ? "true" : "false") +
+             ",\"sent\":" + sent + ",\"acked\":" + acked + ",\"failed\":" + failed +
              ",\"idr_age\":" + v.idr_age + "}";
     }
     if (arg.length()) return "err usage: keyframe [status]";
+    if (!airplay_event_port()) return "err experimental keyframes disabled";
     return airplay_request_keyframe() ? "ok queued (new IDR required)" : "err no ready event channel";
   }
   if (cmd == "resync") {  // closes sessions; the owner may need to restart mirroring manually
@@ -224,7 +233,7 @@ String statusJson(bool full) {
            "\"ip\":\"%s\",\"sta\":%d,"
            "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"idr_age\":%lu,"
            "\"gop\":%lu,\"aus\":%d,\"ov\":%lu,\"lcs\":%lu,\"adrop\":%lu,\"vwait\":%d,\"mdr\":%u,\"mdf\":%u,\"ota\":%d,"
-           "\"rssi\":%d,\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"n\":%d}}",
+           "\"rssi\":%d,\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"tx\":%d,\"n\":%d}}",
            __DATE__, __TIME__, (unsigned long)net_brownouts(),
            millis(), resetReason(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), usbState(), net_mode(), net_ip().c_str(), net_peers(),
@@ -233,7 +242,7 @@ String statusJson(bool full) {
            (unsigned long)v.live_continuations, (unsigned long)v.oversize_drops, v.wait_idr, net_mdns_restarts(), net_mdns_fails(), ota_on() ? 1 : 0,
            net_rssi(),
            ble_mtu(), ble_phy(),
-           (unsigned long)ble_kbps(), (unsigned long)ble_drops(), (unsigned long)ble_reply_drops(), ble_peers());
+           (unsigned long)ble_kbps(), (unsigned long)ble_drops(), (unsigned long)ble_reply_drops(), ble_tx_power(), ble_peers());
   if (full) return s;
   // MTU below ~250 (before the MTU exchange): keep only the fields the app needs to stay alive
   snprintf(s, sizeof s,
@@ -287,6 +296,13 @@ void setup() {
   USB.usbAttributes(0x80);
   USB.usbPower(500);
   USB.begin();
+  // Descriptor power is only requested during enumeration. Let the host configure USB before RF starts.
+  // A bounded grace period keeps standalone externally powered diagnostics usable without a USB host.
+  uint32_t usbStarted = millis();
+  while (!tud_mounted() && millis() - usbStarted < 3000) delay(10);
+  usbConfiguredAtBoot = tud_mounted();
+  usbBootWaitMs = millis() - usbStarted;
+  if (usbConfiguredAtBoot) delay(250);  // let the host supply settle after selecting the configuration
   esp_task_wdt_config_t wdt = {.timeout_ms = WATCHDOG_MS, .idle_core_mask = 0, .trigger_panic = true};
   esp_task_wdt_reconfigure(&wdt);
   esp_task_wdt_add(NULL);

@@ -23,12 +23,16 @@ Existing HID commands, unchanged semantics from the old TCP protocol:
 New:
 - `stream on|off` — continuously forward every access unit over `video` (default off).
 - `snap` — send SPS/PPS + every AU since the last IDR (the current GOP), then reply `ok`.
-- `keyframe [status]` — queue `forceKeyFrame` over the current session's reverse event connection (TCP 7013),
-  or read `sent/acked/failed/idr_age` counters. `ok queued` and an event 2xx reply do **not** prove recovery:
-  require a new actual IDR and a complete fresh decoded image. No HID or session teardown is involved.
-  Automatic stream recovery attempts are limited to three per GOP generation/subscriber, at least 5 s apart;
-  a healthy decoder continuing exactly across an overflow does not request a keyframe. Phone compatibility
-  must be verified on real hardware; this path originates from related AirPlay/CarPlay implementations.
+- `keyframe [status]` — **disabled by default**. `keyframe` returns `err experimental keyframes disabled`;
+  `keyframe status` reports `enabled/sent/acked/failed/idr_age`. The first actual iOS 15 test sent a command,
+  got no valid ACK/new IDR and was followed by mirror shutdown without a board reboot. Default builds now
+  advertise `eventPort=0`, open no event listener and send no such commands, including from automatic recovery.
+  A developer-only `AIRPLAY_EXPERIMENTAL_KEYFRAME=1` build retains TCP 7013 `/command` experiments and the
+  three-attempt/5 s bounds. Neither queued commands nor 2xx replies count as successful decoding recovery.
+- `power [status]` — report whether USB was configured at boot, enumeration wait in ms, and BLE TX
+  readback. The startup guard waits at most 3 s plus 250 ms settling before RF initialization; a hostless
+  external supply retains the bounded fallback. This guard/command is built but not yet installed on the
+  test handset's board (OTA attempts were interrupted); it is not proof of stable power.
 - `resync` — queue session closure on the RTSP task. iOS may stop mirroring completely; it is not an
   automatic reconnect/keyframe guarantee.
 - `res W H` — AirPlay resolution advertised in `/info` (default 480 1040), stored in NVS; takes effect on the next mirroring session.
@@ -50,6 +54,9 @@ When the link drops, the board releases all buttons/keys (same as before).
 `kbps` = AirPlay video bitrate in, `ble.kbps` = video bytes out over BLE, `idr` = ms between IDRs, `idr_age` = ms since the last IDR, `gop` = bytes buffered since last IDR.
 `aus` = buffered access units, `ov` = GOP overflow count, `adrop` = oversized access units dropped, `vwait` = 1 while snapshots are waiting for an IDR. After a GOP overflow the live stream keeps forwarding P-frames for an already-running decoder; only random-access snapshots wait for the next IDR, and the board does not restart.
 `rst` = reset reason of the current boot (`power-on|brownout|watchdog|crash|software|usb|other`), `up` = ms since boot.
+`ble.tx` = controller default connection transmit power readback in dBm (255 on read failure).
+Default TX was reduced from 9 to 0 dBm after strong phone RSSI measurements; this mitigates current peaks,
+but is not proof of a stable supply or a diagnosed electrical cause.
 `ble.drop` = video notifies given up, `ble.rdrop` = replies that never reached a subscribed peer (should stay 0),
 `ble.n` = connected centrals.
 

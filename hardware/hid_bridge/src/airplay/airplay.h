@@ -11,6 +11,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Plaintext reverse commands stopped this iOS 15 mirror in testing. Never enable by default.
+#ifndef AIRPLAY_EXPERIMENTAL_KEYFRAME
+#define AIRPLAY_EXPERIMENTAL_KEYFRAME 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,6 +46,7 @@ void airplay_set_display(uint16_t width, uint16_t height, uint8_t max_fps);
 // Queue a bounded, non-HID forceKeyFrame command on the authenticated session's event channel.
 // Acceptance is not proof of a new IDR; inspect video timestamps/decoder health separately.
 bool airplay_request_keyframe(void);
+uint16_t airplay_event_port(void);  // zero when the experimental protocol is disabled
 void airplay_keyframe_stats(uint32_t *sent, uint32_t *acked, uint32_t *failed);
 // Close RTSP connections. iOS may stop mirroring rather than reconnect automatically.
 void airplay_drop_sessions(void);

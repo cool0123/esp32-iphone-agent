@@ -20,4 +20,5 @@ uint8_t ble_phy();       // 1 or 2 (Mbit)
 uint32_t ble_kbps();     // video bytes out, last second
 uint32_t ble_drops();    // video notifies we failed to send
 uint32_t ble_reply_drops();  // replies that never got out to a subscribed peer
+int ble_tx_power();      // controller readback, dBm
 int ble_peers();         // connected centrals

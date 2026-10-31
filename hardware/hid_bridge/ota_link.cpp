@@ -22,6 +22,7 @@ static void makePass() {
 void ota_begin(const char *hostname) {
   ArduinoOTA.setHostname(hostname);
   ArduinoOTA.setRebootOnSuccess(true);
+  ArduinoOTA.setTimeout(10000);  // shared Wi-Fi/BLE and flash erases can exceed the core's 1 s receive gap
   ArduinoOTA.onStart([]() {
     // A flash write plus a full-power TX burst browns out a board powered from the phone's USB port.
     WiFi.setTxPower(WIFI_POWER_5dBm);

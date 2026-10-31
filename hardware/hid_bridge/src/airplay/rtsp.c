@@ -33,7 +33,12 @@ static void close_conn(ap_conn *c);
 static atomic_bool keyframe_pending, event_ready, drop_pending;
 static atomic_uint_least32_t keyframe_sent, keyframe_acked, keyframe_failed;
 
+uint16_t airplay_event_port(void) {
+  return AIRPLAY_EXPERIMENTAL_KEYFRAME ? AP_EVENT_PORT : 0;
+}
+
 bool airplay_request_keyframe(void) {
+  if (!airplay_event_port()) return false;
   if (!atomic_exchange(&event_ready, false)) return false;
   atomic_store(&keyframe_pending, true);
   return true;
@@ -232,14 +237,18 @@ static void server_task(void *arg) {
     ap_log("rtsp: cannot listen on %d", AP_RTSP_PORT);
     vTaskDelete(NULL);
   }
-  int efd = socket(AF_INET, SOCK_STREAM, 0);
-  a.sin_port = htons(AP_EVENT_PORT);
-  setsockopt(efd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-  if (bind(efd, (struct sockaddr *)&a, sizeof a) || listen(efd, 2)) {
-    close(efd); close(lfd);
-    ap_log("rtsp: cannot listen on event port %d", AP_EVENT_PORT);
-    vTaskDelete(NULL);
-    return;
+  int efd = -1;
+  uint16_t event_port = airplay_event_port();
+  if (event_port) {
+    efd = socket(AF_INET, SOCK_STREAM, 0);
+    a.sin_port = htons(event_port);
+    setsockopt(efd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    if (bind(efd, (struct sockaddr *)&a, sizeof a) || listen(efd, 2)) {
+      close(efd); close(lfd);
+      ap_log("rtsp: cannot listen on event port %d", event_port);
+      vTaskDelete(NULL);
+      return;
+    }
   }
   for (int i = 0; i < MAX_CONNS; i++) conns[i].fd = conns[i].event_fd = -1;
   for (;;) {
@@ -258,7 +267,7 @@ static void server_task(void *arg) {
     fd_set rf;
     FD_ZERO(&rf);
     FD_SET(lfd, &rf);
-    FD_SET(efd, &rf);
+    if (efd >= 0) FD_SET(efd, &rf);
     int maxfd = lfd > efd ? lfd : efd;
     for (int i = 0; i < MAX_CONNS; i++) {
       if (conns[i].event_fd >= 0) {
@@ -270,9 +279,9 @@ static void server_task(void *arg) {
         if (conns[i].fd > maxfd) maxfd = conns[i].fd;
       }
     }
-    struct timeval tv = {0, 100000};
+    struct timeval tv = {event_port ? 0 : 1, event_port ? 100000 : 0};
     if (select(maxfd + 1, &rf, NULL, NULL, &tv) <= 0) continue;
-    if (FD_ISSET(efd, &rf)) {
+    if (efd >= 0 && FD_ISSET(efd, &rf)) {
       struct sockaddr_in peer = {0};
       socklen_t pl = sizeof peer;
       int fd = accept(efd, (struct sockaddr *)&peer, &pl);

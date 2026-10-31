@@ -66,6 +66,16 @@ int main(void) {
  assert(!airplay_request_keyframe());int rt=dial(AP_RTSP_PORT,NULL);char buf[2048];
  const char*setup="SETUP rtsp://host RTSP/1.0\r\nCSeq: 1\r\nContent-Length: 0\r\n\r\n";
  assert(send(rt,setup,strlen(setup),0)==(int)strlen(setup));assert(recv(rt,buf,sizeof buf,0)>0);
+#if !AIRPLAY_EXPERIMENTAL_KEYFRAME
+ assert(airplay_event_port()==0);assert(!airplay_request_keyframe());stats(0,0,0);
+ int disabled=socket(AF_INET,SOCK_STREAM,0);assert(disabled>=0);
+ struct sockaddr_in a={.sin_family=AF_INET,.sin_port=htons(AP_EVENT_PORT)};inet_pton(AF_INET,"127.0.0.1",&a.sin_addr);
+ assert(connect(disabled,(struct sockaddr*)&a,sizeof a)<0);close(disabled);
+ assert(send(rt,setup,strlen(setup),0)==(int)strlen(setup));assert(recv(rt,buf,sizeof buf,0)>0);
+ airplay_drop_sessions();assert(recv(rt,buf,sizeof buf,0)==0);close(rt);
+ puts("Default protocol gate passed: event port zero, no listener or requests, RTSP remains usable");return 0;
+#else
+ assert(airplay_event_port()==AP_EVENT_PORT);
  int wrong=dial(AP_EVENT_PORT,"127.0.0.2");assert(recv(wrong,buf,sizeof buf,0)==0);close(wrong);
  int ev=dial(AP_EVENT_PORT,NULL);wait_ready();assert(!airplay_request_keyframe());command(ev,buf);
  const char*first="HTTP/1.1 200 OK\r\nCSeq: 1\r\nContent-Length: 4\r\n\r\n";
@@ -78,11 +88,13 @@ int main(void) {
  ev=dial(AP_EVENT_PORT,NULL);wait_ready();command(ev,buf);usleep(2200000);stats(3,1,2);assert(recv(ev,buf,sizeof buf,0)==0);close(ev);
  assert(!airplay_request_keyframe());airplay_drop_sessions();assert(recv(rt,buf,sizeof buf,0)==0);close(rt);
  puts("TCP event integration passed: command plist, peer restriction, split/binary ACK, reject, timeout, control survival, teardown");return 0;
+#endif
 }
 '''}
 for name,content in files.items():
  q=p/name;q.parent.mkdir(parents=True,exist_ok=True);q.write_text(content)
 root=pathlib.Path(__file__).resolve().parents[1]/'hid_bridge/src'
 cmd=['cc','-std=gnu11','-g','-Wall','-Wextra','-fsanitize=address,undefined','-pthread','-I'+str(p),'-I'+str(root/'airplay'),str(p/'main.c'),str(root/'airplay/rtsp.c'),str(root/'airplay/event_protocol.c'),str(root/'bplist/bplist.c'),'-o',str(p/'test')]
-subprocess.run(cmd,check=True)
-subprocess.run([str(p/'test')],check=True)
+for flags in [[], ["-DAIRPLAY_EXPERIMENTAL_KEYFRAME=1"]]:
+ subprocess.run(cmd+flags,check=True)
+ subprocess.run([str(p/'test')],check=True,timeout=15)

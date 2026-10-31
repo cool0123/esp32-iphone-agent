@@ -271,7 +271,8 @@ void ble_begin(const String &name) {
   statusLock = xSemaphoreCreateMutex();
   NimBLEDevice::init(name.c_str());
   NimBLEDevice::setMTU(517);
-  NimBLEDevice::setPower(9);  // dBm: retain link margin during setup, including a board powered by a Mac.
+  // Phone RSSI was -24..-35 dBm at 9 dBm TX; reduce peaks on the USB-powered board.
+  if (!NimBLEDevice::setPower(0)) Serial.println("ble: cannot lower TX power");
   NimBLEDevice::setDefaultPhy(BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_1M_MASK);
   NimBLEDevice::setSecurityAuth(true, false, true);  // bonding, Just Works, LE Secure Connections
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
@@ -369,6 +370,7 @@ bool ble_video_send(const uint8_t *p, size_t n) {
 uint32_t ble_kbps() { return millis() - winStart > 2000 ? 0 : kbps; }
 uint32_t ble_drops() { return drops; }
 uint32_t ble_reply_drops() { return replyDrops; }
+int ble_tx_power() { return NimBLEDevice::getPower(); }
 int ble_peers() { return peerCount(); }
 
 uint16_t ble_mtu() {  // the smallest peer's, so one notify fits everyone
