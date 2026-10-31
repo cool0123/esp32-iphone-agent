@@ -26,6 +26,7 @@ import Foundation
     let commands = CommandChannel()
     var onVideo: ((Data) -> Void)?
     var onStatus: ((BoardStatus) -> Void)?
+    var onLinkPreparing: (() -> Void)?  // reset video before enabling any notifications
     var onLinkUp: (() -> Void)?
     var onLinkDown: (() -> Void)?
     private var lastNotify = 0.0  // last notification of any kind, to tell a supervision timeout from a peer drop
@@ -285,6 +286,7 @@ import Foundation
         self.net = net
         pairedID = pairedID ?? UUID()
         found = [Found(id: UUID(), name: "ESP32 Agent 7C3E", rssi: -71)]
+        onLinkPreparing?()
         connected = true
         commands.linkUp()
         onLinkUp?()
@@ -441,6 +443,9 @@ extension BoardLink: CBPeripheralDelegate {
             guard available.isSuperset(of: BoardUUID.all) else {
                 failConnection(String(localized: "Board firmware is missing required features. Update the firmware.")); return
             }
+            // The board can replay CONFIG/IDR as soon as video is subscribed, before the encrypted
+            // net read marks the link ready. Never erase that prefix in onLinkUp.
+            onLinkPreparing?()
             for c in service.characteristics ?? [] {
                 chars[c.uuid] = c
                 if [BoardUUID.reply, BoardUUID.status, BoardUUID.video].contains(c.uuid) { p.setNotifyValue(true, for: c) }

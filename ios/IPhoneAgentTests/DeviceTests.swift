@@ -278,6 +278,38 @@ import XCTest
         XCTAssertNil(feed.frame)
     }
 
+    func testVideoPrefixBeforeLinkReadySurvivesTheReadinessCallback() {
+        #if LEGACY_IOS
+        let model = LegacyModel()
+        #else
+        let model = AppModel.shared
+        #endif
+        let feed = model.feed, board = model.board
+        XCTAssertNotNil(board.onLinkPreparing)
+        let device = FakeDevice(), previousDevice = feed.device
+        feed.device = device; feed.mirroring = true
+        defer { board.onLinkDown?(); feed.device = previousDevice }
+        feed.show(Data([1]), width: 320, height: 480)
+        let previousStream = feed.streamID
+        board.onLinkPreparing?()
+        XCTAssertGreaterThan(feed.streamID, previousStream)
+        XCTAssertNil(feed.frame)
+        // CONFIG and the IDR START can arrive between subscription and the encrypted net read.
+        board.onVideo?(Data([0, 0, 11, 0, 0, 0, 0]))
+        board.onVideo?(Data([1, 0, 5, 0, 0, 0, 0]))
+        let stream = feed.streamID
+        board.onLinkUp?()
+        XCTAssertEqual(feed.streamID, stream)  // readiness must not discard the partial IDR
+        board.onVideo?(Data([2, 0, 6]))
+        feed.publish(.init(jpeg: Data([0xff, 0xd8]), width: 320, height: 480, decodeMs: 0,
+                           unit: .init(data: Data(), idr: true, config: false, snap: false, boardMs: 0),
+                           streamID: stream))
+        XCTAssertTrue(feed.live)
+        board.onLinkDown?()
+        XCTAssertNil(feed.frame)
+        XCTAssertFalse(feed.live)
+    }
+
     func testFreshCalibrationHasNoDriftAndSurvivesARestart() {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         let pointer = Pointer(device: FakeDevice(), calibrationFile: file)

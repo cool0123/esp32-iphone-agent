@@ -35,9 +35,9 @@ enum Mood: String, Codable, Hashable {
         feed.device = board.commands
         board.onVideo = { [weak self] in self?.feed.receive($0) }
         board.onStatus = { [weak self] in self?.feed.mirroring = $0.ap == "streaming"; if let up = $0.up { self?.feed.boardClock(ms: up) } }
+        board.onLinkPreparing = { [weak self] in self?.feed.resetStream() }
         board.onLinkUp = { [weak self] in
             guard let self else { return }
-            feed.resetStream()
             if receiving { Task { try? await self.feed.stream(true) } }
         }
         board.onLinkDown = { [weak self] in self?.feed.linkLost() }

@@ -115,9 +115,9 @@ import UIKit
             self?.metrics.status(s)
             self?.logStatus(s)
         }
+        board.onLinkPreparing = { [weak self] in self?.feed.resetStream() }
         board.onLinkUp = { [weak self] in
             guard let self else { return }
-            feed.resetStream()
             metrics.mtu = board.mtu
             if agent.running && !MockMode.on && FrameMode.current == .stream {  // the board forgot `stream on`: the paused run needs the screen back
                 Task { [weak self] in
