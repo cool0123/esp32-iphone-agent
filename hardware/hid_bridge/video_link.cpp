@@ -1,6 +1,8 @@
 // Mirrored H.264 from AirPlay to BLE, see video_link.h.
 #include "video_link.h"
 #include <esp_heap_caps.h>
+#include <esp_random.h>
+#include "src/video/ring.h"
 #include "ble_link.h"
 #include "src/video/gop.h"
 
@@ -20,6 +22,9 @@ struct Req {
 };
 
 static gop_buf gop;
+static video_ring monitorRing;
+static uint32_t monitorEpoch, monitorAt;
+const size_t MONITOR_RING_CAP = 1024 * 1024;
 static SemaphoreHandle_t lock;
 static uint8_t *scratch;
 static QueueHandle_t reqs;
@@ -176,6 +181,9 @@ bool video_begin() {
     return false;
   }
   gop_init(&gop, arena, GOP_CAP, aus, MAX_AUS);
+  uint8_t *monitorArena = (uint8_t *)heap_caps_malloc(MONITOR_RING_CAP, MALLOC_CAP_SPIRAM);
+  video_ring_init(&monitorRing, monitorArena, monitorArena ? MONITOR_RING_CAP : 0);
+  monitorEpoch = esp_random();
   lock = xSemaphoreCreateMutex();
   reqs = xQueueCreate(4, sizeof(Req));
   if (!lock || !reqs) return false;
@@ -207,6 +215,8 @@ void video_on_au(const uint8_t *au, size_t len, bool idr) {
     winStart = now;
   }
   xSemaphoreTake(lock, portMAX_DELAY);
+  if (monitorRing.cap) video_ring_push(&monitorRing, au, len);
+  monitorAt = now;
   if (len > SCRATCH_CAP) {
     // This AU can never be copied for BLE. Drop the GOP instead of retrying it forever; a later
     // decodable IDR can still recover. Rebooting cannot fix an oversized encoder frame.
@@ -234,18 +244,26 @@ static void request(const String &id, bool bench, uint32_t kb) {
 void video_snap(const String &id) { request(id, false, 0); }
 void video_bench(const String &id, uint32_t kb) { request(id, true, kb); }
 
-bool video_gop_open(gop_view *view) {
-  if (!ready) return false;
+bool video_monitor_open(uint32_t epoch, uint64_t offset, bool cursor, MonitorView *view) {
+  if (!ready || !monitorRing.cap) return false;
   xSemaphoreTake(lock, portMAX_DELAY);
-  bool ok = gop_view_open(&gop, view);
+  *view = {};
+  view->epoch = monitorEpoch;
+  view->end = monitorRing.end;
+  view->captured_ms = monitorAt;
+  view->incremental = cursor && epoch == monitorEpoch && video_ring_read(&monitorRing, offset, nullptr, 0);
+  bool ok = view->incremental || gop_view_open(&gop, &view->prefix);
+  if (ok) view->start = view->incremental ? offset : view->end - view->prefix.bytes;
   xSemaphoreGive(lock);
   return ok;
 }
 
-bool video_gop_read(const gop_view *view, size_t offset, uint8_t *out, size_t len) {
-  if (!ready) return false;
+bool video_monitor_read(const MonitorView *view, uint64_t offset, uint8_t *out, size_t len) {
+  if (!ready || offset < view->start || offset > view->end || len > view->end - offset) return false;
   xSemaphoreTake(lock, portMAX_DELAY);
-  bool ok = gop_view_read(&gop, view, offset, out, len);
+  bool ok = view->incremental
+    ? video_ring_read(&monitorRing, offset, out, len)
+    : gop_view_read(&gop, &view->prefix, (size_t)(offset - view->start), out, len);
   xSemaphoreGive(lock);
   return ok;
 }

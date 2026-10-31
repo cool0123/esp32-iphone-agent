@@ -4,6 +4,7 @@
 #include <string.h>
 #include "../hid_bridge/src/bplist/bplist.h"
 #include "../hid_bridge/src/video/gop.h"
+#include "../hid_bridge/src/video/ring.h"
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { fails++; printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -122,6 +123,31 @@ static void test_bplist_overflow(void) {
   CHECK(bp_open(&r, b, sizeof b) < 0);
 }
 
+static void test_video_ring(void) {
+  uint8_t arena[8], out[16];
+  video_ring r;
+  video_ring_init(&r, arena, sizeof arena);
+  CHECK(video_ring_read(&r, 0, out, 0));
+  CHECK(!video_ring_read(&r, 0, out, 1));
+  video_ring_push(&r, (const uint8_t *)"abcdefgh", 8);
+  CHECK(video_ring_read(&r, 0, out, 8) && !memcmp(out, "abcdefgh", 8));
+  video_ring_push(&r, (const uint8_t *)"ijk", 3);
+  CHECK(!video_ring_read(&r, 0, out, 1));
+  CHECK(video_ring_read(&r, 3, out, 8) && !memcmp(out, "defghijk", 8));
+  CHECK(video_ring_read(&r, 8, out, 3) && !memcmp(out, "ijk", 3));
+  CHECK(!video_ring_read(&r, 12, out, 0));
+  CHECK(!video_ring_read(&r, UINT64_MAX, out, 1));
+  video_ring_push(&r, (const uint8_t *)"0123456789abcdef", 16);
+  CHECK(r.end == 27);
+  CHECK(video_ring_read(&r, 19, out, 8) && !memcmp(out, "89abcdef", 8));
+  CHECK(!video_ring_read(&r, 18, out, 1));
+  // Cursor byte positions continue across 32-bit and backing-buffer boundaries.
+  r.end = UINT32_MAX - 2ull;
+  video_ring_push(&r, (const uint8_t *)"ABCDEFGH", 8);
+  CHECK(r.end == UINT32_MAX + 6ull);
+  CHECK(video_ring_read(&r, UINT32_MAX - 2ull, out, 8) && !memcmp(out, "ABCDEFGH", 8));
+}
+
 static void test_gop_view(void) {
   uint8_t arena[100], out[100], cfg[] = {0, 0, 0, 1, 0x67};
   gop_au aus[8];
@@ -224,6 +250,7 @@ int main(void) {
   test_bplist_overflow();
   test_gop();
   test_gop_view();
+  test_video_ring();
   test_chunker();
   printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
   return fails != 0;

@@ -80,9 +80,12 @@ the previous credential. Use it only on a trusted LAN, never expose this HTTP po
 
 - `GET /status`: board telemetry.
 - `GET /gop.h264`: SPS/PPS plus the cached decodable GOP, with `X-Board-Ms` and `X-Frame-Ms` headers.
-- `GET /gop.h264?gen=G&offset=N`: only the suffix after the previous complete download when the generation
-  still matches. `X-Gop-Gen`, `X-Gop-Start`, `X-Gop-Bytes` and `X-Gop-Config` describe the response. Offset
-  excludes the initial config bytes. A changed generation resets the response to start 0 plus config.
+- `GET /gop.h264?gen=G&offset=N`: only the continuous stream suffix after the previous complete download.
+  `X-Monitor-Protocol: 3` identifies the rolling-cursor protocol. `X-Gop-Gen` is a random boot epoch,
+  `X-Gop-Start`/`X-Gop-Bytes` are absolute 64-bit start/end byte positions, and `X-Gop-Config` is the number
+  of initial SPS/PPS bytes (excluded from the cursor). A 1 MB rolling buffer lets an already-running decoder
+  continue across the separate 4 MB GOP cache overflowing. A reconnect/lagged cursor starts again from a
+  decodable GOP plus config when one exists, otherwise returns 503. A response with config resets the decoder.
   Advance a cursor only after a complete response; retain a late initial GOP as a decoder prefix and fetch
   the new suffix before publishing any screenshot. The final frame must still pass source-age checks.
 - Both require `Authorization: Bearer <window-credential>`; there is no network HID command endpoint.
@@ -90,7 +93,10 @@ the previous credential. Use it only on a trusted LAN, never expose this HTTP po
 The desktop can fetch the initial cache over Wi-Fi and then only new bytes, without subscribing to BLE video.
 A first true-device test exposed that repeatedly downloading the full cache exceeded the 3 s freshness bound
 as the GOP grew (about 4 s at 0.5 MB); incremental downloads address that measured bottleneck. They still need
-true-device acceptance after deployment. This reduces BLE load and
+true-device acceptance after deployment. The desktop keeps one strict low-delay ffmpeg decoder alive, checks
+that every expected picture was decoded, and clears the capture on a decode failure. Its capture worker polls
+continuously so the decoder stays ready; reading a cached JPEG does not refresh its source capture time.
+Credential renewal preserves the decoder and byte cursor. This reduces BLE load and
 avoids replaying megabytes through BLE after each desktop reconnect. The client must bound capture age,
 including download/decode time, and reject truncated or corrupt downloads. A GOP replacement during the
 transfer deliberately aborts it; retry from the new IDR. No decodable GOP returns 503. This does not repair

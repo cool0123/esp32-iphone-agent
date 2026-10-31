@@ -29,29 +29,33 @@ static esp_err_t unavailable(httpd_req_t *req, const char *reason) {
 
 static esp_err_t handle(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  httpd_resp_set_hdr(req, "X-Monitor-Protocol", "3");
   if (!authorized(req)) return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "authentication required");
   if (strcmp(req->uri, "/status") == 0) {
     httpd_resp_set_type(req, "application/json");
     String s = statusFn();
     return httpd_resp_send(req, s.c_str(), s.length());
   }
-  gop_view view;
-  if (!video_gop_open(&view)) return unavailable(req, "waiting for a decodable GOP");
-  size_t start = 0;
-  char query[80], gen[16], offset[16];
-  if (httpd_req_get_url_query_len(req)) {
+  bool cursor = httpd_req_get_url_query_len(req) > 0;
+  uint32_t wantedGen = 0;
+  uint64_t wantedOffset = 0;
+  char query[96], gen[16], offset[24];
+  if (cursor) {
     if (httpd_req_get_url_query_str(req, query, sizeof query) != ESP_OK ||
         httpd_query_key_value(query, "gen", gen, sizeof gen) != ESP_OK ||
         httpd_query_key_value(query, "offset", offset, sizeof offset) != ESP_OK) {
       return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "expected gen and offset");
     }
-    char *endGen, *endOffset;
-    unsigned long wantedGen = strtoul(gen, &endGen, 10), wantedOffset = strtoul(offset, &endOffset, 10);
-    if (!gen[0] || !offset[0] || *endGen || *endOffset || gen[0] == '-' || offset[0] == '-') {
+    if (!gen[0] || !offset[0] || strspn(gen, "0123456789") != strlen(gen) ||
+        strspn(offset, "0123456789") != strlen(offset)) {
       return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid cursor");
     }
-    if (wantedGen == view.gen && wantedOffset <= view.bytes) start = wantedOffset;
+    unsigned long long g = strtoull(gen, nullptr, 10), o = strtoull(offset, nullptr, 10);
+    if (g > UINT32_MAX || o == UINT64_MAX) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid cursor");
+    wantedGen = (uint32_t)g; wantedOffset = o;
   }
+  MonitorView view;
+  if (!video_monitor_open(wantedGen, wantedOffset, cursor, &view)) return unavailable(req, "waiting for a decodable GOP");
   uint8_t *buf = (uint8_t *)heap_caps_malloc(16 * 1024, MALLOC_CAP_SPIRAM);
   if (!buf) return unavailable(req, "no snapshot memory");
   char stamp[16];
@@ -60,21 +64,21 @@ static esp_err_t handle(httpd_req_t *req) {
   char up[16];
   snprintf(up, sizeof up, "%lu", (unsigned long)millis());
   httpd_resp_set_hdr(req, "X-Board-Ms", up);
-  char generation[16], begin[16], bytes[16], config[16];
-  snprintf(generation, sizeof generation, "%lu", (unsigned long)view.gen);
-  snprintf(begin, sizeof begin, "%lu", (unsigned long)start);
-  snprintf(bytes, sizeof bytes, "%lu", (unsigned long)view.bytes);
-  snprintf(config, sizeof config, "%u", start == 0 ? (unsigned)view.cfg_len : 0);
+  char generation[16], begin[24], bytes[24], config[16];
+  snprintf(generation, sizeof generation, "%lu", (unsigned long)view.epoch);
+  snprintf(begin, sizeof begin, "%llu", (unsigned long long)view.start);
+  snprintf(bytes, sizeof bytes, "%llu", (unsigned long long)view.end);
+  snprintf(config, sizeof config, "%u", view.incremental ? 0 : (unsigned)view.prefix.cfg_len);
   httpd_resp_set_hdr(req, "X-Gop-Gen", generation);
   httpd_resp_set_hdr(req, "X-Gop-Start", begin);
   httpd_resp_set_hdr(req, "X-Gop-Bytes", bytes);
   httpd_resp_set_hdr(req, "X-Gop-Config", config);
   httpd_resp_set_type(req, "video/h264");
-  esp_err_t result = start == 0 ? httpd_resp_send_chunk(req, (const char *)view.cfg, view.cfg_len) : ESP_OK;
+  esp_err_t result = view.incremental ? ESP_OK : httpd_resp_send_chunk(req, (const char *)view.prefix.cfg, view.prefix.cfg_len);
   uint32_t started = millis();
-  for (size_t offset = start; result == ESP_OK && offset < view.bytes;) {
-    size_t len = min((size_t)16 * 1024, view.bytes - offset);
-    if (millis() - started > 30000 || !video_gop_read(&view, offset, buf, len)) {
+  for (uint64_t offset = view.start; result == ESP_OK && offset < view.end;) {
+    size_t len = (size_t)min((uint64_t)16 * 1024, view.end - offset);
+    if (millis() - started > 30000 || !video_monitor_read(&view, offset, buf, len)) {
       result = ESP_FAIL;  // no chunk terminator: clients reject this truncated response
       break;
     }

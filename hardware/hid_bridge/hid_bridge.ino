@@ -180,6 +180,7 @@ String board(const String &line, const String &id) {
     ble_unpair();
     return "";
   }
+  // Read-only LAN diagnostics v3: continuous ring cursor, independent of the BLE GOP cache.
   if (cmd == "monitor") {
     if (arg == "off") { monitor_enable(false, nullptr, nullptr, 0); return "ok off"; }
     if (arg != "on") return "err usage: monitor on|off";

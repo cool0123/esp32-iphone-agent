@@ -4,9 +4,15 @@
 #include <Arduino.h>
 #include "src/video/gop.h"
 
-// Read-only Wi-Fi diagnostics shares the cache, with its own small copy buffer.
-bool video_gop_open(gop_view *view);
-bool video_gop_read(const gop_view *view, size_t offset, uint8_t *out, size_t len);
+// A cold decoder starts from the GOP; a running one follows the independent rolling byte cursor.
+struct MonitorView {
+  gop_view prefix;
+  uint64_t start, end;
+  uint32_t epoch, captured_ms;
+  bool incremental;
+};
+bool video_monitor_open(uint32_t epoch, uint64_t offset, bool cursor, MonitorView *view);
+bool video_monitor_read(const MonitorView *view, uint64_t offset, uint8_t *out, size_t len);
 
 bool video_begin();
 void video_on_config(const uint8_t *sps_pps, size_t len);  // AirPlay callbacks (mirror task)
