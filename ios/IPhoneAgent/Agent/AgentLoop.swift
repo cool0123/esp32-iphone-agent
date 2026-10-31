@@ -338,14 +338,26 @@ extension Pointer: Gestures {}
 
     func nextActions() async throws -> [Planned] {
         guard let actor else { throw LLMError(message: "no actor model") }
-        // actions and their effect only: echoing earlier thoughts makes the model repeat them instead of looking
+        // Keep action feedback compact; retain prior screen observations separately so returning to an
+        // earlier screen does not make the actor forget that it already completed part of the task.
         let hidden: Set<String> = ["t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed"]
         let history = steps.suffix(8).filter { $0["plan"] == nil }.map { s -> String in
             let effect = s["changed"] == .bool(true) ? " -> screen changed"
                 : s["changed"] == .bool(false) ? " -> screen did NOT change" : ""
             return String(PyJSON.dumps(s.without(hidden)).prefix(300)) + effect
         }.joined(separator: "\n")
-        var prompt = "Goal: \(task)\n\nPlan:\n\(plan)\n\nRecent actions:\n\(history.isEmpty ? "(none)" : history)\n\nNext action?"
+        let observations = steps.filter { $0["shot"] == .bool(true) && !($0["thought"]?.str ?? "").isEmpty }
+            .suffix(8).map { s in
+                PyJSON.dumps(["before_action": s["action"] ?? .null,
+                              "observation": .str(String((s["thought"]?.str ?? "").prefix(300)))])
+            }.joined(separator: "\n")
+        var prompt = "Goal: \(task)\n\nPlan:\n\(plan)\n\n"
+        if !observations.isEmpty {
+            prompt += "Earlier screen observations (historical; the current image is authoritative):\n\(observations)\n"
+                + "Use these only to remember task progress already observed. Returning to an earlier screen does not "
+                + "reset the plan; confirm completion instead of repeating completed steps.\n\n"
+        }
+        prompt += "Recent actions:\n\(history.isEmpty ? "(none)" : history)\n\nNext action?"
         var reply = ""
         for attempt in 0..<3 {  // retry unparseable replies, a little less deterministically
             let (text, seconds, frame) = try await ask("actor", actor, actorPrompt, prompt, temperature: 0.4 * Double(attempt))

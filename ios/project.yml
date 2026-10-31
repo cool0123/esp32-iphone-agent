@@ -41,7 +41,7 @@ targets:
       properties:
         CFBundleDisplayName: ESP32 Agent 15
         CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: 连接局域网中的远程运维服务。

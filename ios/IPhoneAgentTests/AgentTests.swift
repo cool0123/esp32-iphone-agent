@@ -146,6 +146,48 @@ import XCTest
             + "{\"action\": \"type\", \"text\": \"caf\\u00e9\"}\n\nNext action?"))
     }
 
+    func testPriorObservedProgressSurvivesReturningToTheInitialScreen() async throws {
+        let actor = FakeModel { _ in "THINK: the requested return is complete\nDO: done ok" }
+        let agent = AgentLoop(phone: nil, screen: FakeScreen(), actor: actor, planner: actor, trace: nil)
+        agent.steps = [
+            ["shot": .bool(true), "thought": .str("The requested app is open; its content is visible."),
+             "action": .str("tap"), "x": .int(920), "y": .int(650)],
+            ["shot": .bool(true), "thought": .str("The system menu is open; return to the starting screen now."),
+             "action": .str("tap"), "x": .int(640), "y": .int(790)],
+            ["shot": .bool(false), "action": .str("reconnected")],
+        ]
+        _ = try await agent.nextActions()
+        let prompt = actor.prompts[0]
+        XCTAssertTrue(prompt.contains("The requested app is open; its content is visible."))
+        XCTAssertTrue(prompt.contains("The system menu is open; return to the starting screen now."))
+        XCTAssertTrue(prompt.contains("historical; the current image is authoritative"))
+        XCTAssertTrue(prompt.contains("confirm completion instead of repeating completed steps"))
+        XCTAssertTrue(prompt.hasSuffix("Next action?"))
+    }
+
+    func testObservationMemoryIsBoundedAndExcludesStepsWithoutAnImage() async throws {
+        let actor = FakeModel { _ in "THINK: observe\nDO: wait" }
+        let agent = AgentLoop(phone: nil, screen: FakeScreen(), actor: actor, planner: actor, trace: nil)
+        agent.steps = (0..<10).map { n -> JObject in
+            ["shot": .bool(true), "thought": .str("Observed state \(n): " + String(repeating: "x", count: 400) + "OVERFLOW"),
+             "action": .str("tap")]
+        }
+        agent.steps.append(["shot": .bool(false), "thought": .str("UNOBSERVED"), "action": .str("hiccup")])
+        _ = try await agent.nextActions()
+        let memory = actor.prompts[0].components(separatedBy: "Earlier screen observations")[1]
+            .components(separatedBy: "Recent actions:")[0]
+        let entries = try memory.split(separator: "\n").filter { $0.hasPrefix("{") }.map {
+            let value = try JSONSerialization.jsonObject(with: Data($0.utf8))
+            return try XCTUnwrap(value as? [String: String])
+        }
+        XCTAssertEqual(entries.count, 8)
+        XCTAssertTrue(entries.first?["observation"]?.hasPrefix("Observed state 2:") == true)
+        XCTAssertTrue(entries.last?["observation"]?.hasPrefix("Observed state 9:") == true)
+        XCTAssertTrue(entries.allSatisfy { ($0["observation"]?.count ?? 0) <= 300 })
+        XCTAssertFalse(memory.contains("OVERFLOW"))
+        XCTAssertFalse(memory.contains("UNOBSERVED"))
+    }
+
     func testPromptsAreVerbatimFromThePythonServer() throws {
         let agentPy = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("../../server/hidagent/agent.py").standardized
