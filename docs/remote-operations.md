@@ -205,9 +205,33 @@ to an earlier screen must not reset task progress. This does not hardcode Calend
 iOS 15 `41240758313`, modern iOS `41240758258` and CI `41240758290` all passed; both simulator jobs ran **99 tests
 with zero failures**. The original IPA SHA256 is `532155f30b16af3087135a64fbfbde37db56d30749327d4a96c3102a5d347b1f`.
 The signed phone package is `Signed/ESP32-Agent15-v1.0.8.ipa`, SHA256
-`ab9bfa2ac26a3663cef48f950bcc2662f3ce9323ba7d655387af0c5492c83193` (430048 bytes). **Build 8 is not installed**:
-the phone remains on 1.0.7 with a live native stream, stopped task and AllSign wireless enabled. The owner must
-reopen mirroring in portrait to restore the desktop decoder before replacement and real-device acceptance.
+`ab9bfa2ac26a3663cef48f950bcc2662f3ce9323ba7d655387af0c5492c83193` (430048 bytes). At signing time the phone
+remained on 1.0.7 and the new desktop decoder needed a mirroring restart. The owner subsequently restored
+mirroring; build 8 was actually installed and launched, with authenticated hello reporting **1.0.8** at
+`2026-10-31T21:04:33.466Z`. The retained model configuration and phone red-image test passed. Historical frames
+caught up to about 0.13 s source age before the task began.
+
+**One complete independent Calendar task passed on build 8.** The computer only set up the first Home Screen
+page with the Calendar icon visible. The phone confirmed preparation at `21:10:29.756Z`; desktop BLE/probe/Ops
+were then shut down for `21:10:32.165Z—21:11:27.166Z` (55.001 s), with only Ops restored afterward. Planning
+and the first model request began before full disconnection; all gestures, subsequent model calls and the
+normal completion occurred inside the disconnected window. The phone tapped Calendar, AssistiveTouch and
+Home, retried Home once after observing the menu still open, saw the desktop and emitted `done` at
+**21:10:53.891Z**. Final telemetry was `running=false,lastStep=done`, source age about 0.08 s. There was no
+manual stop substituted for completion, no text entry and no calendar-event edit.
+
+The phone's original trace directory `ESP32 Agent 15/traces/20261031-171029` was inspected afterward through
+Files: `008.jpg` clearly showed Calendar's day view with the AssistiveTouch menu; `012.jpg` showed the normal
+Home Screen. Saved desktop evidence of these inspections consists of Files preview screenshots; the original
+JPG/steps.jsonl files remain on the phone and were not exported. This corroborates the gesture/model logs and
+live final screenshot. It validates this handset, portrait calibration and starting page once, not arbitrary
+apps or starting states. Returning from this evidence inspection to the actual Home Screen was a later
+computer-controlled action, separate from the independent acceptance.
+
+During later evidence collection build 8 also crossed one history overflow with native decoding intact:
+`ov:2→3,lcs:1→2`, unchanged IDR `1965864`, `bo=18`, BLE drop count 4 unchanged, and final source age about 0.11 s
+with no decoder warning. Build 7 and build 8 each now have one caught-up phone overflow example. Cold/lagging
+client recovery, long-term power stability and broader task reliability remain unresolved.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
