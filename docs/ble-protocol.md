@@ -91,8 +91,12 @@ if the link changes during that wait. This is a continuous prefix replay, not an
 proof of source freshness. Build 11 is now signed/installed (authenticated 1.0.11). Its first launch logged
 OFF/ON after readiness, natively decoded the retained historical prefix, rejected its ~511 s age, and caught
 up to a fresh ~0.31 s source without a desktop stream restart. A subsequent force-quit was confirmed, but
-intermittent/stale mirrored output blocked guarded desktop relaunch; repeated restart recovery is not yet
-validated. All three cloud workflows succeeded; both simulator suites passed 102 tests.
+intermittent/stale mirrored output initially blocked guarded desktop relaunch. The owner then manually
+reopened Agent without a requested mirror restart: this retained-GOP process relaunch also recovered natively,
+first observed live after ~205.43 s at ~0.066 s source age, with no desktop forwarding restart/snap/keyframe.
+Seven further samples across 30.47 s stayed live (0.048–0.387 s). This is one successful retained-GOP relaunch;
+missing-IDR cold recovery, restored background subscriptions and general reconnect reliability are unverified.
+All three cloud workflows succeeded; both simulator suites passed 102 tests.
 
 ## net (JSON)
 Read: `{"mode":"ap","ssid":"ESP32Agent-1A2B","pass":"<random 12 chars>","ip":"192.168.4.1"}`

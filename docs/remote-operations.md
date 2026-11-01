@@ -388,5 +388,25 @@ or board flash was done in this trial. Supply, long-term stability and missing-I
 unresolved. Evidence: `build/reconnect-recovery/verification.json`; self-review only, no independent
 second-review completion claimed.
 
+**The pending retained-GOP relaunch trial subsequently passed once.** The owner was instructed only to
+reopen Agent, preserving the existing mirror. Authenticated 1.0.11 hello: `1793492052.5599997`. Logs show a new
+BLE connection becoming command-ready at `2026-11-01T00:14:13.309Z`, followed by phone-issued OFF/ON and
+forwarding restart at `00:14:13.796Z`. This does not exercise the distinct restored-background-subscription
+path. Before catch-up the board retained a complete 3,032,905-byte GOP (`bo=23,ov=0,vwait=0`).
+
+Native decoding replayed ~1,639 s-old history with live=false/task stopped. After removing the desktop's
+second BLE central, the phone caught up automatically: first observed live at `1793492257.9908884`, source
+age **0.06566 s**, **205.43 s** after hello. No desktop stream restart, snap, keyframe request, board flash or
+mirror restart assisted this trial. Complete native screenshots and the entire observation series are saved.
+After restoring the desktop management central, seven samples over **30.47 s** all stayed live, source ages
+**0.0477–0.3869 s**, without decoder errors. Board count stayed 23, original IDR timestamp stayed 0, GOP grew
+to 3,256,179 bytes and remained complete. TX still read 9 dBm; events remain disabled and OTA off.
+
+`build/reconnect-recovery/verification.json` now records `build11.restart_trial.passed=true` for this one
+force-quit → owner manual relaunch → retained-GOP replay/catch-up, preserving the earlier blocked stage.
+First-launch catch-up remains a separate pass. The ~205 s replay delay, missing-IDR cold recovery, background
+restoration, broad reconnect reliability, source stalls and supply stability remain unresolved. No autonomous
+operation task was run, and this short observation is not a long-duration power/reliability acceptance.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
