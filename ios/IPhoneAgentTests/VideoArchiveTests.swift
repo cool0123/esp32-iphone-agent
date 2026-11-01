@@ -94,6 +94,44 @@ final class VideoArchiveTests: XCTestCase {
         XCTAssertNil(loaded)
     }
 
+    @MainActor func testHTTPClockLowerBoundRecoversFromQueuedRequestWithoutRejuvenatingHistory() {
+        let feed = VideoFeed(), device = FakeDevice()
+        feed.device = device; feed.mirroring = true
+        feed.videoNetworkFailed(invalidChain: false)
+        let local = now()
+        func publish(stamp: UInt32) {
+            let unit = AccessUnit(data: Data(), idr: true, config: false, snap: true, boardMs: stamp)
+            feed.publish(.init(jpeg: Data([1]), width: 32, height: 32, decodeMs: 0,
+                               unit: unit, streamID: feed.streamID))
+        }
+        let first = AccessUnit(data: Data(), idr: true, config: false, snap: true, boardMs: 99_900)
+        feed.acceptWiFi(.init(units: [first], restarted: true, boardMs: 100_000), requestStarted: local - 10)
+        publish(stamp: 99_900)
+        XCTAssertEqual(feed.capturedAt, local - 10.1, accuracy: 0.001)
+        XCTAssertFalse(feed.live)
+        let fresh = AccessUnit(data: Data(), idr: false, config: false, snap: true, boardMs: 100_000)
+        feed.acceptWiFi(.init(units: [fresh], restarted: false, boardMs: 100_100), requestStarted: local - 0.1)
+        // A BLE receive-time upper bound must not override HTTP's conservative source clock.
+        feed.boardClock(ms: 1)
+        publish(stamp: 100_000)
+        XCTAssertEqual(feed.capturedAt, local - 0.2, accuracy: 0.001)
+        XCTAssertTrue(feed.live)
+        // A later slow response must not poison the estimate again; historical bytes remain old.
+        let old = AccessUnit(data: Data(), idr: false, config: false, snap: true, boardMs: 80_000)
+        feed.acceptWiFi(.init(units: [old], restarted: false, boardMs: 100_200), requestStarted: local - 5)
+        publish(stamp: 80_000)
+        XCTAssertEqual(feed.capturedAt, local - 20.2, accuracy: 0.001)
+        XCTAssertFalse(feed.live)
+        let stamp = feed.capturedAt
+        feed.acceptWiFi(.init(units: [], restarted: false, boardMs: 100_300), requestStarted: local)
+        XCTAssertEqual(feed.capturedAt, stamp)  // metadata/empty responses never republish the old image
+        XCTAssertFalse(feed.live)
+        feed.resetStream()
+        feed.boardClock(ms: 0)
+        feed.show(Data([2]), width: 32, height: 32)
+        XCTAssertTrue(feed.live)  // transport reset clears the previous HTTP clock
+    }
+
     @MainActor func testNetworkInterruptionRetainsReferencesButImmediatelyBlocksLive() {
         let feed = VideoFeed(), device = FakeDevice()
         feed.device = device; feed.mirroring = true

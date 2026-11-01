@@ -62,7 +62,8 @@ extension ScreenSource {
     private(set) var capturedAt = 0.0
     /// A decode error or a lost chunk since the last good frame: the shown frame is stale until the next IDR.
     private(set) var broken = false
-    private var clockOffset: Double?  // local s − board s, the smallest seen (≈ the link latency)
+    private var clockOffset: Double?  // BLE receive-time upper bound; smallest latency seen
+    private var wifiClockOffset: Double?  // HTTP request-start lower bound; greatest conservative bound seen
     var mirroring = false  // board status says ap == streaming
     var metrics: Metrics?
     weak var device: HIDDevice?
@@ -159,7 +160,7 @@ extension ScreenSource {
         guard f.streamID == streamID, !waitingForIDR else { return }
         frame = f.jpeg
         updated = now()
-        capturedAt = clockOffset.map { Double(f.unit.boardMs) / 1000 + $0 } ?? updated
+        capturedAt = (wifiClockOffset ?? clockOffset).map { Double(f.unit.boardMs) / 1000 + $0 } ?? updated
         broken = false
         if wifiPublishStream == f.streamID { networkReady = true; wifiPublishStream = nil }
         note = ""
@@ -261,7 +262,7 @@ extension ScreenSource {
         wifiGeneration += 1
         wifiJob?.cancel(); wifiJob = nil
         wifiSession?.invalidateAndCancel(); wifiSession = nil
-        transport = "ble"; networkReady = true; wifiPublishStream = nil
+        transport = "ble"; networkReady = true; wifiPublishStream = nil; wifiClockOffset = nil
     }
 
     private func startWiFi(_ endpoint: VideoEndpoint, link: Int) {
@@ -355,9 +356,11 @@ extension ScreenSource {
     }
 
     func acceptWiFi(_ batch: VideoBatch, requestStarted: Double, emit: Bool = true) {
-        // Anchor to request start, not completion: transfer latency cannot rejuvenate history.
+        // Server uptime is sampled AFTER request start. This gives a lower bound on clock offset:
+        // larger bounds remove old queue delays without making any capture newer than its source.
+        // Keep it separate from BLE's receive-time upper bound. Saved replay uses the same boot clock.
         let offset = requestStarted - Double(batch.boardMs) / 1000
-        clockOffset = min(clockOffset ?? offset, offset)
+        wifiClockOffset = max(wifiClockOffset ?? offset, offset)
         if batch.restarted { invalidateVideo() }
         if batch.units.contains(where: { $0.idr }) { waitingForIDR = false }
         guard !waitingForIDR else { return }
