@@ -497,10 +497,31 @@ SHA256f3f8c8d074ed943090ce543d841d90e6526f76a19e8f09f0dc442b3267a157ea.
 Build15 initially reconnected repeatedly in background. After foregrounding it produced a native fresh
 frame (0.320 s) while the board was P-only (ov1,vwait1) in the same mirror. A subsequent controlled
 force-quit confirmed Ops offline, but the mirror stopped delivering video (ap=connected,fps0). Both
-readers now lack a fresh source, so HID is blocked. That controlled P-only trial is BLOCKED, not passed;
-owner must open the App without changing system mirroring first to preserve the test. No autonomous
-task ran. Power root cause/background reliability remain unresolved; bo stayed25, self-review only.
-Evidence and historical failures are retained in verification.json.
+readers lacked a fresh source then, so HID was blocked. That first P-only trial stayed BLOCKED. A later
+controlled trial is reported separately below. No autonomous task ran. Power root cause/background
+reliability remain unresolved; bo stayed25, self-review only. Evidence and failures remain in verification.json.
+
+**Later build 15 cached P-only force-quit trial passed once.** The owner follow-up produced fresh images,
+but a new IDR had arrived, so it cannot pass the prior blocked trial. Two new monitor off/on tests
+blocked old images with409: first screenshot200 at2.749/2.804 s, live telemetry plus200 at4.992/4.598 s.
+Desktop capture401 now triggers prompt BLE monitor renewal, preserving decoder/cursor;503 does not.
+Both readers recovered in the second outage. External agent_runner tests passed22/22, including real
+red-prefix→401→renewal→blue-P-suffix decoding in the same ffmpeg process. This desktop fix is outside
+the main repository; copies and results are archived with the evidence.
+
+Fourteen grouped drag gestures visibly moved the form and crossed overflow1→2. Seven native samples
+during load all returned200 (source ages0.222–1.538 s). An ensuing natural BLE disconnect accepted saved
+references at14:56:13.539Z and recovered P-only live output. The subsequent process test actually
+removed the App card, confirmed Ops offline, and reopened via desktop BLE while the original mirror
+continued. New hello1793545178.1564085; saved cursor accepted14:59:41.426Z. First live screenshot was
+observed42.559 s after hello, age0.270 s; the last409 sample was20.795 s and next sample42.559 s, so
+this is an observation bound, not exact decode latency. Before/after board checks showvwait1/ov2/bo25
+and unchanged last-IDR board timestamp25979160 ms (up−idr_age; status.idr is only the IDR interval).
+No new mirror/IDR/board reboot or desktop stream restart/snap/keyframe was used during this trial.
+Seven further native screenshots over18.35 s were live/200 (ages0.184–0.502 s). This passes one cached
+same-session P-only process recovery. No-cache/no-IDR cold recovery, recurrent BLE disconnects,
+long-duration power stability and broader autonomous tasks remain unverified. Automatic tasks stopped.
+
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.

@@ -176,10 +176,30 @@ slow/fast requests, historical pictures, BLE contamination, empty responses and 
 After upgrading, build 15 accepted saved references and produced native live output (age 0.320 s)
 while the board was P-only (ov=1,vwait=1), after the App was brought to foreground. This is an observed
 recovery path, not the following controlled force-quit trial: after that trial actually closed the App
-and Ops went offline, the mirror stopped sending video (ap=connected,fps=0). Both readers have no
-fresh source; HID is blocked. That controlled P-only trial is BLOCKED, not passed. Reopen the App
-without changing system mirroring first to preserve the experiment. No autonomous tasks ran; power
-root cause and background reconnect reliability remain unresolved. bo stayed 25; self-review only.
+and Ops went offline, the mirror stopped sending video (ap=connected,fps=0).
+At that point both readers lacked a fresh source and HID was blocked. That first controlled P-only
+trial remained BLOCKED; the later trial below is separate. No autonomous tasks ran; power root cause
+and background reconnect reliability remain unresolved. bo stayed 25; self-review only.
+
+The owner's next reopen restored fresh native output, but a new IDR had arrived, so it did not pass
+that first P-only trial. Subsequent build 15 monitor off/on tests rejected stale images (409); first
+screenshot200 was observed at2.75/2.80 s, both live telemetry and200 at4.99/4.60 s. Desktop monitor401
+now signals immediate BLE capability renewal while keeping reference pictures/cursor;22 host tests
+passed, including a real red-prefix/401/renewal/blue-P-suffix decode in one ffmpeg process. Both readers
+recovered in the second real outage trial; the fix is in the external agent_runner desktop code.
+
+Fourteen grouped drag gestures visibly scrolled the App and crossed history overflow1→2. During
+load,7 native screenshots succeeded (sample source ages0.22–1.54 s). A natural BLE disconnect then
+accepted cached references and recovered fresh P-only output. A separate second force-quit trial
+removed the App card, confirmed Ops offline, and relaunched it by desktop BLE HID with the original
+mirror still streaming. Hello1793545178.1564085; saved cursor accepted at14:59:41.426Z; first observed
+live screenshot42.559 s after hello, source age0.270 s. Last409 was sampled at20.795 s; the next sample
+was42.559 s, so this is an observation bound, not exact decode latency. Both boardside checks had
+vwait1/ov2/bo25 and the same last-IDR timestamp25979160 ms (up−idr_age); status.idr itself is only the
+IDR interval. Seven follow-up native screenshots over18.35 s were live (ages0.184–0.502 s). This passes
+one cached same-session P-only process-relaunch trial; it does not establish recovery without full
+cached references/IDR, long-term supply stability or broader task reliability. Prior failures remain.
+
 
 ## net (JSON)
 Read: `{"mode":"ap","ssid":"ESP32Agent-1A2B","pass":"<random 12 chars>","ip":"192.168.4.1"}`
