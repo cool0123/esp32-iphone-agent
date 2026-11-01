@@ -408,5 +408,39 @@ First-launch catch-up remains a separate pass. The ~205 s replay delay, missing-
 restoration, broad reconnect reliability, source stalls and supply stability remain unresolved. No autonomous
 operation task was run, and this short observation is not a long-duration power/reliability acceptance.
 
+**Current build 12 deployment: source recovery acceptance remains blocked.** Authenticated hello reports
+1.0.12 at `1793494392.9145372`; telemetry selects `videoTransport=wifi`. The model check still returns
+red / reasoning_chars=0 with the existing official DeepSeek configuration. Signed IPA SHA256:
+`a1b9aac19be5cbcc95909a7c88dc21062ceef74f885ede365e15c339b80c7b54` (453,761 bytes). Fresh native Wi-Fi
+output and recovery latency are **not yet verified**.
+
+Implementation `a0f397b1ec63ab9660bf6d35dceba6a4a0193ef8` validates complete responses, reference prefixes,
+cursor continuity and source age before publication. Only each HTTP batch's last decoded picture publishes,
+so historical intermediate frames cannot inherit its latest timestamp. Empty responses cannot rejuvenate
+old pictures; link/error/cancellation guards remain. Ephemeral private-IP HTTP refuses redirects; monitor/OTA
+credentials are hidden in command reply logs. The read-only board monitor now renews the same active
+per-boot capability, preventing two centrals from rotating each other's token. Actual repeated renewal
+preserved the first credential, and unauthenticated status still returned401.
+
+The first simulator run had one overly strict RGB assertion; the same H.264 fixture now checks strong blue
+dominance after platform color conversion, retaining last-only-output/reference/time assertions. Corrective
+test commit `7d9371152b12022190e887123c4733fda3f72868`: CI `41258182148`, modern `41258182057`,
+Legacy `41258182085` all succeeded, both suites **107 tests, zero failures**. The installed binary came from
+the original implementation build; the follow-up changes tests only.
+
+Firmware build and existing sanitizer host suite passed. A tool's 60 s timeout interrupted the first OTA
+attempt; background retry returned0. SHA256 `cf7924bd54994283f8118507c01f3cf0dac56ead8efcd697e25c7dbaf63ae0cd`,
+verified running marker **fw=wifi-video-power-v1**. TX is now set/read for actual connection handles;
+the old DEFAULT readback did not establish active-peer power. Two peers read0 dBm, including seven samples
+after desktop reconnect. Brownouts nevertheless rose **23→24** around reboot, so power is unresolved.
+Short idle observation (uptime107240→133042ms, bo24 unchanged) is not load or long-term acceptance.
+
+After OTA the board is **mirror idle, empty GOP, waiting IDR**, USB/Wi-Fi/management alive. The phone is
+stopped, selected Wi-Fi, frameLive=false; screenshot correctly409. The system must restart screen mirroring
+before native Wi-Fi testing can proceed. Desktop HID also has no fresh source and cannot safely perform
+that UI sequence. Missing-IDR cold recovery remains unsolved; the failed keyframe experiment stays disabled.
+OTA is off, coexistence balanced. No autonomous task was run. Evidence is under
+`build/reconnect-recovery/verification.json`; self-review only, no independent review completion claimed.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.

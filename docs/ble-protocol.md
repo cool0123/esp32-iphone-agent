@@ -98,6 +98,33 @@ Seven further samples across 30.47 s stayed live (0.048–0.387 s). This is one 
 missing-IDR cold recovery, restored background subscriptions and general reconnect reliability are unverified.
 All three cloud workflows succeeded; both simulator suites passed 102 tests.
 
+## Read-only Wi-Fi video (build 12)
+
+After command readiness, build 12 sends stream OFF and obtains the private IPv4/3235/48-hex-character
+monitor capability over BLE. Its HTTP client uses an ephemeral uncached session with redirects refused.
+BLE video callbacks are ignored while Wi-Fi is selected. A complete HTTP response and cursor continuity
+must validate before decoding. The prefix requires SPS/PPS plus a complete IDR; subsequent requests use
+the 64-bit byte cursor and boot epoch. Historical intermediate pictures are reference-only: only the last
+picture in a response may publish, using X-Frame-Ms anchored conservatively to request start/board uptime.
+Empty responses never refresh an existing image. Link loss/cancellation invalidates old callbacks. Network
+failure or 503 clears the reference chain and blocks input until a complete replay succeeds. Missing-IDR
+cold recovery is still unresolved.
+
+The phone's monitor/OTA command replies redact credentials before debug logging. The firmware now renews
+an active per-boot monitor capability without rotating its token or closing in-flight requests. This prevents
+two BLE centrals from repeatedly invalidating each other's video authentication. Unauthenticated HTTP
+requests still return 401; the API remains read-only.
+
+Build 12 (1.0.12) is installed and has selected Wi-Fi; **fresh native Wi-Fi video and recovery speed are not
+yet verified**. The new firmware's runtime marker is `wifi-video-power-v1`, verified after successful OTA.
+Connection TX power is set/read using each actual connection handle; the old `getPower()` readback queried
+DEFAULT and could not establish per-link power. Actual maximum connected-peer TX now reads 0 dBm,
+including after a desktop reconnect. Brownout count nevertheless rose 23→24 around this deployment, so
+supply remains unresolved. Current mirror is idle after reboot, with no fresh screenshot; no HID/agent
+task is authorized by these stale frames. Existing experimental keyframe recovery remains disabled.
+Both simulator suites passed 107 tests, and firmware build/host tests passed; those do not replace the
+blocked native Wi-Fi/source recovery acceptance.
+
 ## net (JSON)
 Read: `{"mode":"ap","ssid":"ESP32Agent-1A2B","pass":"<random 12 chars>","ip":"192.168.4.1"}`
 (SoftAP credentials are generated once at first boot and kept in NVS).
