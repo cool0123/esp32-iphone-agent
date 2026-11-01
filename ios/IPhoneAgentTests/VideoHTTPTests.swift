@@ -85,7 +85,10 @@ final class VideoHTTPTests: XCTestCase {
             context.render(ci, toBitmap: &pixel, rowBytes: 4, bounds: CGRect(x: 0,y: 0,width: 1,height: 1),
                            format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
             XCTAssertGreaterThan(pixel[2], 220)
-            XCTAssertLessThan(pixel[0], 25)
+            // VideoToolbox/JPEG color conversion is not bit-exact RGB. Distinguish the new blue
+            // picture from the red prefix by channel dominance, retaining a large separation.
+            XCTAssertGreaterThan(Int(pixel[2]) - Int(pixel[0]), 180)
+            XCTAssertGreaterThan(Int(pixel[2]) - Int(pixel[1]), 180)
             done.fulfill()
         }
         decoder.queue.async {
