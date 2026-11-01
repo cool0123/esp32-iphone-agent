@@ -408,7 +408,7 @@ First-launch catch-up remains a separate pass. The ~205 s replay delay, missing-
 restoration, broad reconnect reliability, source stalls and supply stability remain unresolved. No autonomous
 operation task was run, and this short observation is not a long-duration power/reliability acceptance.
 
-**Current build 12 deployment: source recovery acceptance remains blocked.** Authenticated hello reports
+**Historical build 12 deployment state (superseded by the follow-up below).** Authenticated hello reports
 1.0.12 at `1793494392.9145372`; telemetry selects `videoTransport=wifi`. The model check still returns
 red / reasoning_chars=0 with the existing official DeepSeek configuration. Signed IPA SHA256:
 `a1b9aac19be5cbcc95909a7c88dc21062ceef74f885ede365e15c339b80c7b54` (453,761 bytes). Fresh native Wi-Fi
@@ -441,6 +441,39 @@ before native Wi-Fi testing can proceed. Desktop HID also has no fresh source an
 that UI sequence. Missing-IDR cold recovery remains unsolved; the failed keyframe experiment stays disabled.
 OTA is off, coexistence balanced. No autonomous task was run. Evidence is under
 `build/reconnect-recovery/verification.json`; self-review only, no independent review completion claimed.
+
+**Follow-up: native Wi-Fi passed within a bounded scope; cache recovery remains unverified.**
+Build 12 passed seven native live samples (source age 0.767–1.066 s), an actual force-quit/relaunch
+(1,223,632-byte GOP; 29.482 s hello-to-first-observed-live; source age 0.607 s), and monitor off/on
+recovery (24.472 s after reopening; source age 0.905 s). Outage samples remained blind. No desktop
+stream restart, snap/keyframe, mirror restart during those trials, or autonomous task was involved.
+The prior BLE trial used about 3 MB; these are not controlled speed-ratio measurements.
+
+Build 13 is actually installed (authenticated 1.0.13 hello 1793515032.7389562), after both simulator
+suites passed 113 tests. It preserves retryable transport references and adds a validated, checksummed,
+64 MB local reference cache, without credentials. The live board must accept the exact epoch/cursor
+before local emit=false replay; cache decode alone cannot authorize input. Initial large-history transfer
+failed, followed by GOP overflow (ov=1,vwait=1), without a completed cache chain. Removing desktop
+BLE/video competition did not recover it. This is a failure boundary, not a cache-recovery pass.
+
+Follow-up commit a39e3c800efdfbb6b488d5a6fe0217e7a91bc16b adds AU-aligned, 128 KiB target history
+windows with exact per-window source time, GOP-backed continuation before the live ring, and new-config
+epoch/reference invalidation. A single larger AU remains whole. Firmware build and sanitizer host tests
+passed. Build 14 also closes an empty-response reauthorization bug found during self-review: only a new
+decoded frame may restore the network gate; old callbacks stay rejected while references remain usable.
+Diagnostics expose only numeric HTTP/URL error codes. Build 14 is now authenticated as 1.0.14 (hello 1793516620.6908545), and all three workflows
+succeeded (both simulator suites 113 tests). Old firmware accepted its saved cursor and started local
+reference replay at 07:03:43.516Z, but the source stopped advancing; the next observed decoded frame
+was >7 s old, so fresh recovery is not claimed. Later build 13 output had also been observed live
+(age 0.659 s), without a controlled cache restart. CI, OTA and native acceptance remain separate
+fields in verification.json. A missing IDR without a valid local chain still needs a new
+system mirror keyframe; the failed experimental reverse-channel path remains disabled. Bounded-window firmware is deployed (OTA0, verified wifi-video-window-v2 marker, binary SHA256
+767467e03c935c31cb73f6975dadf242479e36efaaaf237b7639e07affb9f5c0). A prior upload timed out;
+retry with phone video polling paused succeeded and stream mode was restored. Brownout count rose
+24→25 at reboot. Actual peer TX0dBm and USB boot wait130ms are confirmed; OTA off, keyframe disabled,
+coexistence balanced. The mirror is now idle/empty and needs a system restart before fresh native
+window/cache acceptance can continue. Power root cause is unresolved and requires physical evidence. Automatic tasks stayed stopped; no independent reviewer
+completion is claimed.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.

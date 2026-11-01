@@ -115,15 +115,41 @@ an active per-boot monitor capability without rotating its token or closing in-f
 two BLE centrals from repeatedly invalidating each other's video authentication. Unauthenticated HTTP
 requests still return 401; the API remains read-only.
 
-Build 12 (1.0.12) is installed and has selected Wi-Fi; **fresh native Wi-Fi video and recovery speed are not
-yet verified**. The new firmware's runtime marker is `wifi-video-power-v1`, verified after successful OTA.
-Connection TX power is set/read using each actual connection handle; the old `getPower()` readback queried
-DEFAULT and could not establish per-link power. Actual maximum connected-peer TX now reads 0 dBm,
-including after a desktop reconnect. Brownout count nevertheless rose 23→24 around this deployment, so
-supply remains unresolved. Current mirror is idle after reboot, with no fresh screenshot; no HID/agent
-task is authorized by these stale frames. Existing experimental keyframe recovery remains disabled.
-Both simulator suites passed 107 tests, and firmware build/host tests passed; those do not replace the
-blocked native Wi-Fi/source recovery acceptance.
+Build 12 subsequently passed seven native Wi-Fi live samples (source ages 0.767–1.066 s), one
+complete-GOP process relaunch (1,223,632 bytes, 29.482 s from hello to first observed live frame), and
+one monitor outage recovery (24.472 s after reopening). The prior BLE relaunch used about 3 MB, so
+these trials do not establish a controlled speed ratio. Automatic tasks stayed stopped.
+
+Build 13 (installed, authenticated 1.0.13 hello at 1793515032.7389562) preserves references/cursor across
+transport failures and checkpoints validated chains in a 64 MB local cache. Cache replay is emit=false
+and requires the live board to accept its exact session/cursor. Tokens/keys/commands are never cached.
+Both simulator suites passed 113 tests. Its initial large-history transfer failed before a complete chain
+was saved; the board then overflowed to P-only (ov=1,vwait=1). A later 1.0.13 hello at
+1793516123.6557567 was followed by an observed native live frame (age 0.659 s), but no controlled
+force-quit cache recovery was established.
+
+Follow-up implementation `a39e3c800efdfbb6b488d5a6fe0217e7a91bc16b` adds bounded AU-aligned GOP
+windows (128 KiB target; a larger single AU stays whole), continuing older offsets from the GOP even
+when they precede the 1 MB live ring. Each window retains its own last AU source timestamp. Incremental
+responses omit config; the first window still requires SPS/PPS+IDR. New encoder configuration resets the
+ring/reference GOP and advances the monitor epoch; in-flight old views are rejected. Protocol remains 3.
+The build 14 phone patch requires an actual new decoded frame after an outage: empty responses and
+pre-outage callbacks cannot reauthorize an old image. Diagnostics record only numeric HTTP/URL error codes.
+Build 14 is installed (authenticated 1.0.14 hello at 1793516620.6908545); all three CI workflows
+passed, both simulator suites 113 tests. The old running firmware accepted its saved cursor and local
+reference replay began, but the source then stopped advancing: the next observed image was >7 s old.
+No native fresh cache recovery is claimed. Installation and firmware runtime acceptance are tracked
+separately in build/reconnect-recovery/verification.json.
+
+Connection TX power is set/read using actual handles; the old DEFAULT readback did not establish per-link
+power. Prior two-peer/reconnect samples read 0 dBm. Bounded-window firmware is deployed with verified
+marker wifi-video-window-v2, SHA256 767467e03c935c31cb73f6975dadf242479e36efaaaf237b7639e07affb9f5c0.
+After one upload timeout, retry with phone polling paused returned0; stream configuration was restored.
+Brownouts rose 24→25 around this reboot;
+supply remains unresolved. USB boot configuration was observed after130ms; actual peer TX reads0dBm.
+The current mirror is idle with no GOP; a system mirror restart is required for native acceptance.
+Keyframe experiments remain disabled, OTA off, coexistence balanced. Host/simulator passes and deployment
+alone do not establish P-only recovery, independent task success, or long-duration supply stability.
 
 ## net (JSON)
 Read: `{"mode":"ap","ssid":"ESP32Agent-1A2B","pass":"<random 12 chars>","ip":"192.168.4.1"}`
