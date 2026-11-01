@@ -227,7 +227,7 @@ extension AppModel: OpsApp {
                 "app": ["connected": app.board.connected, "mirroring": app.feed.mirroring, "frameAge": age,
                         "running": app.agent.running, "task": app.agent.task, "steps": app.agent.steps.count,
                         "recovering": app.opsRecovering, "needsHelp": app.opsNeedsHelp,
-                        "frameLive": app.feed.live, "decoderNote": app.feed.note,
+                        "frameLive": app.feed.live, "decoderNote": app.feed.note, "videoTransport": app.feed.transport,
                         "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? ""]]
     }
 

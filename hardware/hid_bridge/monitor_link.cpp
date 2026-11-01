@@ -91,6 +91,12 @@ static esp_err_t handle(httpd_req_t *req) {
 }
 
 bool monitor_enable(bool on, MonitorStatus status, char *out, size_t out_len) {
+  // A second central must not rotate an active client's read-only credential or reference prefix.
+  if (on && server && status && out && out_len >= sizeof token && (int32_t)(expires - millis()) > 0) {
+    expires = millis() + WINDOW_MS;
+    snprintf(out, out_len, "%s", token);
+    return true;
+  }
   if (server) { httpd_stop(server); server = NULL; }
   memset(token, 0, sizeof token);
   if (!on) return true;

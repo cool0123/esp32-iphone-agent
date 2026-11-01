@@ -38,7 +38,7 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
     }
 
     /// Decode one access unit (call on `queue`).
-    func decode(_ unit: AccessUnit, streamID: Int = 0) {
+    func decode(_ unit: AccessUnit, streamID: Int = 0, emit: Bool = true) {
         if unit.config { invalidate() }
         if unit.idr { (gop, gopBytes) = ([], 0); needsIDR = false }
         if !unit.config && needsIDR { return }
@@ -46,10 +46,10 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
             gop.append(unit)
             gopBytes += unit.data.count
         }
-        let status = decodeOne(unit, emit: true, streamID: streamID)
+        let status = decodeOne(unit, emit: emit, streamID: streamID)
         guard status != noErr else { return }
         resetSession()
-        if gop.last?.data == unit.data, gop.first?.idr == true, replay(streamID: streamID) {
+        if gop.last?.data == unit.data, gop.first?.idr == true, replay(streamID: streamID, emit: emit) {
             let n = gop.count
             DispatchQueue.main.async { DebugLog.write("decoder: session lost (\(status)); decoded the GOP again (\(n) units)") }
             return
@@ -59,8 +59,8 @@ final class H264Decoder: @unchecked Sendable {  // confined to `queue`
     }
 
     /// Decode the cached GOP into a fresh session; only its last frame is shown.
-    private func replay(streamID: Int) -> Bool {
-        for (i, u) in gop.enumerated() where decodeOne(u, emit: i == gop.count - 1, streamID: streamID) != noErr { return false }
+    private func replay(streamID: Int, emit: Bool) -> Bool {
+        for (i, u) in gop.enumerated() where decodeOne(u, emit: emit && i == gop.count - 1, streamID: streamID) != noErr { return false }
         return true
     }
 

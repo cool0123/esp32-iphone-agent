@@ -41,10 +41,10 @@ targets:
       properties:
         CFBundleDisplayName: ESP32 Agent 15
         CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "11"
+        CFBundleVersion: "12"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        NSLocalNetworkUsageDescription: 连接局域网中的远程运维服务。
+        NSLocalNetworkUsageDescription: 接收开发板的视频并连接局域网运维服务。
         NSBluetoothAlwaysUsageDescription: 连接开发板以接收屏幕画面并操作手机。
         UIBackgroundModes: [bluetooth-central]
         UIFileSharingEnabled: true
@@ -87,6 +87,9 @@ targets:
             CFBundleURLSchemes: [iphoneagent]
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: Receive screen video from the local board.
         NSBluetoothAlwaysUsageDescription: ESP32 Agent talks to its USB board over Bluetooth to see the screen and move the pointer.
         UIBackgroundModes: [bluetooth-central]
         UIFileSharingEnabled: true

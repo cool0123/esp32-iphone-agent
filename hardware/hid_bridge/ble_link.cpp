@@ -113,6 +113,10 @@ class ServerCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *s, NimBLEConnInfo &ci) override {
     if (slotFor(ci.getConnHandle()) < 0) { s->disconnect(ci.getConnHandle()); return; }
     logConn("connect", ci);
+    // DEFAULT is not a connection handle. The controller may apply its own default on connect.
+    NimBLEDevice::setPower(0);
+    if (esp_ble_tx_power_set_enhanced(ESP_BLE_ENHANCED_PWR_TYPE_CONN, ci.getConnHandle(), ESP_PWR_LVL_N0) != ESP_OK)
+      Serial.println("ble: cannot set connection TX power");
     tuneLink(ci.getConnHandle());
     if (peerCount() < MAX_PEERS) NimBLEDevice::startAdvertising();  // room for the debug harness
   }
@@ -370,7 +374,18 @@ bool ble_video_send(const uint8_t *p, size_t n) {
 uint32_t ble_kbps() { return millis() - winStart > 2000 ? 0 : kbps; }
 uint32_t ble_drops() { return drops; }
 uint32_t ble_reply_drops() { return replyDrops; }
-int ble_tx_power() { return NimBLEDevice::getPower(); }
+int ble_tx_power() {
+  int maximum = -128;
+  for (int i = 0; i < MAX_PEERS; i++) {
+    int h = peers[i];
+    if (h < 0) continue;
+    int level = esp_ble_tx_power_get_enhanced(ESP_BLE_ENHANCED_PWR_TYPE_CONN, (uint16_t)h);
+    if (level == ESP_PWR_LVL_INVALID) return 255;
+    int dbm = (level - ESP_PWR_LVL_N0) * 3;
+    maximum = max(maximum, dbm);
+  }
+  return maximum == -128 ? NimBLEDevice::getPower() : maximum;
+}
 int ble_peers() { return peerCount(); }
 
 uint16_t ble_mtu() {  // the smallest peer's, so one notify fits everyone

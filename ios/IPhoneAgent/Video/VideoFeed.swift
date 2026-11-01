@@ -71,6 +71,10 @@ extension ScreenSource {
     private let decoder = H264Decoder()
     private(set) var streamID = 0
     private var waitingForIDR = true
+    private var wifiJob: Task<Void, Never>?
+    private var wifiGeneration = 0
+    private var wifiSession: URLSession?
+    private(set) var transport = "ble"
 
     init() {
         decoder.onFrame = { [weak self] f in DispatchQueue.main.async { self?.publish(f) } }
@@ -104,6 +108,7 @@ extension ScreenSource {
 
     /// One `video` notify from BoardLink.
     func receive(_ chunk: Data) {
+        guard transport == "ble" else { return }
         metrics?.videoBytes(chunk.count)
         let dropsBefore = assembler.drops
         let unit = assembler.add(chunk)
@@ -127,6 +132,7 @@ extension ScreenSource {
 
     /// The link (re)connected: chunk numbering starts over.
     func resetStream() {
+        stopWiFi()
         assembler.reset(); clockOffset = nil
         invalidateVideo()
         note = "waiting for a complete keyframe"
@@ -213,6 +219,8 @@ extension ScreenSource {
     }
 
     func stream(_ on: Bool) async throws {
+        if !on { stopWiFi() }
+        else if transport == "wifi" { streamOn = true; return }
         try await device?.send("stream \(on ? "on" : "off")")
         streamOn = on
     }
@@ -227,11 +235,102 @@ extension ScreenSource {
         // The firmware video task polls at 20 ms; let it observe OFF before issuing ON.
         try await Task.sleep(nanoseconds: 200_000_000)
         guard device.connected, device.links == link else { throw DeviceError(message: "board link changed during video restart") }
+        if device is CommandChannel {
+            do {
+                let endpoint = try VideoEndpoint(reply: await device.send("monitor on"))
+                guard device.connected, device.links == link else { throw DeviceError(message: "board link changed during video restart") }
+                startWiFi(endpoint, link: link)
+                return
+            } catch {
+                guard device.connected, device.links == link else { throw DeviceError(message: "board link changed during video restart") }
+                DebugLog.write("Wi-Fi video unavailable; using BLE")
+            }
+        }
         assembler.reset()
         invalidateVideo()
         note = "waiting for a complete keyframe"
         try await stream(true)
         DebugLog.write("video forwarding restarted after link readiness; waiting for live source")
+    }
+
+    private func stopWiFi() {
+        wifiGeneration += 1
+        wifiJob?.cancel(); wifiJob = nil
+        wifiSession?.invalidateAndCancel(); wifiSession = nil
+        transport = "ble"
+    }
+
+    private func startWiFi(_ endpoint: VideoEndpoint, link: Int) {
+        stopWiFi()
+        assembler.reset(); invalidateVideo()
+        transport = "wifi"; streamOn = true
+        note = "waiting for a complete keyframe over Wi-Fi"
+        let generation = wifiGeneration
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil; config.httpCookieStorage = nil
+        config.connectionProxyDictionary = [:]
+        config.timeoutIntervalForRequest = 20; config.timeoutIntervalForResource = 30
+        let session = URLSession(configuration: config, delegate: VideoHTTPDelegate(), delegateQueue: nil)
+        wifiSession = session
+        DebugLog.write("Wi-Fi video started after link readiness; waiting for live source")
+        wifiJob = Task { [weak self] in
+            var endpoint = endpoint, cursor = VideoCursor(), renewed = now()
+            var failures = 0
+            while !Task.isCancelled {
+                guard let self, self.wifiGeneration == generation, let device = self.device,
+                      device.connected, device.links == link else { return }
+                do {
+                    if now() - renewed > 600 {
+                        endpoint = try VideoEndpoint(reply: await device.send("monitor on"))
+                        renewed = now()
+                    }
+                    let started = now()
+                    var request = URLRequest(url: URL(string: endpoint.base.absoluteString + "/gop.h264" + cursor.query)!)
+                    request.setValue("Bearer " + endpoint.token, forHTTPHeaderField: "Authorization")
+                    request.cachePolicy = .reloadIgnoringLocalCacheData
+                    let (bytes, response) = try await session.data(for: request)
+                    try Task.checkCancellation()
+                    guard self.wifiGeneration == generation, device.connected, device.links == link else { return }
+                    guard let response = response as? HTTPURLResponse else { throw DeviceError(message: "invalid video response") }
+                    if response.statusCode == 401 {
+                        renewed = 0
+                        throw DeviceError(message: "video credential expired")
+                    }
+                    let batch = try cursor.accept(bytes, response: response)
+                    self.acceptWiFi(batch, requestStarted: started)
+                    let acceptedStream = self.streamID
+                    // Drain this batch before fetching another: bounded queue/memory, final image only.
+                    await withCheckedContinuation { c in self.decoder.queue.async { c.resume() } }
+                    if self.streamID != acceptedStream { cursor = VideoCursor() }
+                    failures = 0
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                } catch {
+                    if Task.isCancelled || self.wifiGeneration != generation { return }
+                    failures += 1
+                    // A 503 (missing IDR) or temporary network failure must not make cached pictures fresh.
+                    self.note = "Wi-Fi video waiting for a complete reference chain"
+                    cursor = VideoCursor()
+                    self.invalidateVideo()
+                    if failures == 1 { DebugLog.write("Wi-Fi video interrupted; input remains blocked until fresh decoding") }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        }
+    }
+
+    func acceptWiFi(_ batch: VideoBatch, requestStarted: Double) {
+        // Anchor to request start, not completion: transfer latency cannot rejuvenate history.
+        let offset = requestStarted - Double(batch.boardMs) / 1000
+        clockOffset = min(clockOffset ?? offset, offset)
+        if batch.restarted { invalidateVideo() }
+        if batch.units.contains(where: { $0.idr }) { waitingForIDR = false }
+        guard !waitingForIDR else { return }
+        let stream = streamID
+        decoder.queue.async { [decoder] in
+            for (i, unit) in batch.units.enumerated() {
+                decoder.decode(unit, streamID: stream, emit: i == batch.units.count - 1)
+            }
+        }
     }
 
     /// Wait for the source to pass the action time. A delayed continuous stream must catch up on its

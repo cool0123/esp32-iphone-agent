@@ -29,6 +29,8 @@ const long MOVE_LIMIT = 4096;  // worst case ~3.3 s, safely below the 8 s watchd
 #define DEBUG_SERIAL 0  // 1: echo commands and the AirPlay handshake over USB serial
 #endif
 
+// Explicit runtime marker: ino timestamps can be cached when only a .cpp changes.
+static const char *firmwareRevision = "wifi-video-power-v1";
 const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the board instead of staying offline
 static uint32_t usbBootWaitMs;
 static bool usbConfiguredAtBoot;
@@ -229,12 +231,12 @@ String statusJson(bool full) {
   VideoStats v = video_stats();
   char s[512];
   snprintf(s, sizeof s,
-           "{\"bv\":\"%s %s\",\"bo\":%lu,\"up\":%lu,\"rst\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\","
+           "{\"bv\":\"%s %s\",\"fw\":\"%s\",\"bo\":%lu,\"up\":%lu,\"rst\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\","
            "\"ip\":\"%s\",\"sta\":%d,"
            "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"idr_age\":%lu,"
            "\"gop\":%lu,\"aus\":%d,\"ov\":%lu,\"lcs\":%lu,\"adrop\":%lu,\"vwait\":%d,\"mdr\":%u,\"mdf\":%u,\"ota\":%d,"
            "\"rssi\":%d,\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"tx\":%d,\"n\":%d}}",
-           __DATE__, __TIME__, (unsigned long)net_brownouts(),
+           __DATE__, __TIME__, firmwareRevision, (unsigned long)net_brownouts(),
            millis(), resetReason(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), usbState(), net_mode(), net_ip().c_str(), net_peers(),
            apStates[airplay_state()], cfg_width(), cfg_height(), (unsigned long)v.kbps, v.fps, (unsigned long)v.idr_ms,

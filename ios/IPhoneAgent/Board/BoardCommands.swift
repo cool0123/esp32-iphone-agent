@@ -179,7 +179,7 @@ extension BoardTransport {
         }
         if name != "ping" {
             DebugLog.write(String(format: "cmd #%d %@ → %@ %@ (%.0f ms)", id, String(command.prefix(40)),
-                                  reply.ok ? "ok" : "err", String(reply.text.prefix(60)), (now() - started) * 1000))
+                                  reply.ok ? "ok" : "err", (name == "monitor" || name == "ota") ? "‹private reply›" : String(reply.text.prefix(60)), (now() - started) * 1000))
         }
         guard reply.ok else { throw DeviceError(message: "err " + reply.text) }
         return reply.text
