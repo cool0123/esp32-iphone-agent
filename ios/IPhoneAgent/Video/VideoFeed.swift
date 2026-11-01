@@ -76,6 +76,7 @@ extension ScreenSource {
     private var wifiSession: URLSession?
     private(set) var transport = "ble"
     private(set) var networkReady = true
+    private var wifiPublishStream: Int?
     private let archive = VideoArchive()
 
     init() {
@@ -160,6 +161,7 @@ extension ScreenSource {
         updated = now()
         capturedAt = clockOffset.map { Double(f.unit.boardMs) / 1000 + $0 } ?? updated
         broken = false
+        if wifiPublishStream == f.streamID { networkReady = true; wifiPublishStream = nil }
         note = ""
         if size.width != CGFloat(f.width) || size.height != CGFloat(f.height) {
             size = CGSize(width: f.width, height: f.height)
@@ -259,7 +261,7 @@ extension ScreenSource {
         wifiGeneration += 1
         wifiJob?.cancel(); wifiJob = nil
         wifiSession?.invalidateAndCancel(); wifiSession = nil
-        transport = "ble"; networkReady = true
+        transport = "ble"; networkReady = true; wifiPublishStream = nil
     }
 
     private func startWiFi(_ endpoint: VideoEndpoint, link: Int) {
@@ -298,9 +300,9 @@ extension ScreenSource {
                     guard let response = response as? HTTPURLResponse else { throw DeviceError(message: "invalid video response") }
                     if response.statusCode == 401 {
                         renewed = 0
-                        throw VideoHTTPUnavailable()
+                        throw VideoHTTPUnavailable(status: 401)
                     }
-                    guard response.statusCode == 200 else { throw VideoHTTPUnavailable() }
+                    guard response.statusCode == 200 else { throw VideoHTTPUnavailable(status: response.statusCode) }
                     let batch = try cursor.accept(bytes, response: response)
                     // The live board must first accept this boot epoch and exact byte cursor. Only
                     // then may disk references enter the decoder; a board restart sends a new prefix.
@@ -329,7 +331,14 @@ extension ScreenSource {
                     if !(error is URLError || error is VideoHTTPUnavailable) {
                         cursor = VideoCursor(); saved = nil
                     }
-                    if failures == 1 { DebugLog.write("Wi-Fi video interrupted; input remains blocked until fresh decoding") }
+                    if failures == 1 {
+                        // Codes/status only: never log URLs, headers, bodies or credentials.
+                        let failure: String
+                        if let urlError = error as? URLError { failure = "URL error \(urlError.code.rawValue)" }
+                        else if let unavailable = error as? VideoHTTPUnavailable { failure = "HTTP \(unavailable.status)" }
+                        else { failure = "invalid video chain" }
+                        DebugLog.write("Wi-Fi video interrupted (\(failure)); input remains blocked until fresh decoding")
+                    }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             }
@@ -339,9 +348,10 @@ extension ScreenSource {
     func videoNetworkFailed(invalidChain: Bool) {
         // A transport interruption does not consume cursor bytes. Preserve references, but block HID
         // immediately, even if the previously shown frame is less than three seconds old.
-        networkReady = false
+        networkReady = false; wifiPublishStream = nil
         note = "Wi-Fi video interrupted; waiting for a verified source"
         if invalidChain { invalidateVideo() }
+        else { streamID += 1 }  // reject in-flight output without discarding decoder references
     }
 
     func acceptWiFi(_ batch: VideoBatch, requestStarted: Double, emit: Bool = true) {
@@ -351,8 +361,8 @@ extension ScreenSource {
         if batch.restarted { invalidateVideo() }
         if batch.units.contains(where: { $0.idr }) { waitingForIDR = false }
         guard !waitingForIDR else { return }
-        if emit { networkReady = true }
         let stream = streamID
+        if emit && batch.units.contains(where: { !$0.config }) { wifiPublishStream = stream }
         decoder.queue.async { [decoder] in
             for (i, unit) in batch.units.enumerated() {
                 decoder.decode(unit, streamID: stream, emit: emit && i == batch.units.count - 1)

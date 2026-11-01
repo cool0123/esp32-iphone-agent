@@ -12,6 +12,10 @@ void gop_init(gop_buf *g, uint8_t *arena, size_t cap, gop_au *aus, int max) {
 }
 
 void gop_set_config(gop_buf *g, const uint8_t *annexb, size_t len, uint32_t ts) {
+  // Configuration belongs to a new reference chain; never pair it with the old GOP.
+  g->previous_n = g->n;
+  g->used = 0; g->n = 0; g->gen++;
+  g->wait_idr = true; g->stream_only = false;
   if (len > GOP_CFG_MAX) len = 0;  // never seen in practice; treat as missing
   memcpy(g->cfg, annexb, len);
   g->cfg_len = len;

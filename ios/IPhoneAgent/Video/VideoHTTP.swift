@@ -20,7 +20,7 @@ struct VideoEndpoint {
 }
 
 /// HTTP/network failure before any bytes were accepted; the current cursor remains retryable.
-struct VideoHTTPUnavailable: Error {}
+struct VideoHTTPUnavailable: Error { let status: Int }
 
 struct VideoBatch {
     let units: [AccessUnit]

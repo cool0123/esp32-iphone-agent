@@ -5,6 +5,7 @@
 #include "../hid_bridge/src/bplist/bplist.h"
 #include "../hid_bridge/src/video/gop.h"
 #include "../hid_bridge/src/video/ring.h"
+#include "../hid_bridge/src/video/monitor.h"
 #include "../hid_bridge/src/airplay/event_protocol.h"
 
 static int fails;
@@ -147,6 +148,54 @@ static void test_video_ring(void) {
   video_ring_push(&r, (const uint8_t *)"ABCDEFGH", 8);
   CHECK(r.end == UINT32_MAX + 6ull);
   CHECK(video_ring_read(&r, UINT32_MAX - 2ull, out, 8) && !memcmp(out, "ABCDEFGH", 8));
+}
+
+static void test_monitor_windows(void) {
+  uint8_t arena[64], ring[8], out[32]; gop_au aus[16]; gop_buf g; video_ring r;
+  gop_init(&g, arena, sizeof arena, aus, 16); video_ring_init(&r, ring, sizeof ring);
+  const uint8_t cfg[] = {0,0,0,1,0x67,0x42,0,0,0,1,0x68,0x01};
+  const uint8_t au[] = {0,0,0,1,0x65,0x80};
+  gop_set_config(&g, cfg, sizeof cfg, 1);
+  video_monitor_view v, saved;
+  CHECK(!monitor_view_open(&g, &r, 7, 0, 0, 0, false, 8, &v));
+  for (int i = 0; i < 3; i++) { gop_push(&g, au, sizeof au, i == 0, 10 + i); video_ring_push(&r, au, sizeof au); }
+  CHECK(monitor_view_open(&g, &r, 7, 12, 0, 0, false, 8, &v));
+  CHECK(!v.incremental && v.from_gop && v.start == 0 && v.end == 6 && v.captured_ms == 10);
+  CHECK(monitor_view_read(&g, &r, 7, &v, 0, out, 6) && !memcmp(out, au, 6));
+  CHECK(!monitor_view_read(&g, &r, 7, &v, 0, out, 7));
+  CHECK(!monitor_view_read(&g, &r, 8, &v, 0, out, 6));
+  // The 8-byte ring no longer has byte 6. A replay must continue from the larger GOP.
+  CHECK(!video_ring_read(&r, 6, NULL, 0));
+  CHECK(monitor_view_open(&g, &r, 7, 12, 7, 6, true, 8, &v));
+  CHECK(v.incremental && v.from_gop && v.start == 6 && v.end == 12 && v.captured_ms == 11);
+  CHECK(monitor_view_read(&g, &r, 7, &v, 6, out, 6));
+  CHECK(!monitor_view_read(&g, &r, 7, &v, 5, out, 1));
+  CHECK(monitor_view_open(&g, &r, 7, 12, 7, 12, true, 8, &v) && v.end == 18 && v.captured_ms == 12);
+  CHECK(monitor_view_open(&g, &r, 7, 12, 7, 18, true, 8, &v) && v.start == v.end && v.incremental);
+  CHECK(monitor_view_open(&g, &r, 7, 12, 6, 6, true, 8, &v) && !v.incremental && v.start == 0);
+  CHECK(monitor_view_open(&g, &r, 7, 12, 7, UINT64_MAX, true, 8, &v) && !v.incremental);
+  // An oversized first AU stays whole and its original source time survives batching.
+  CHECK(monitor_view_open(&g, &r, 7, 12, 0, 0, false, 2, &saved) && saved.end == 6);
+  gop_push(&g, au, sizeof au, true, 20); video_ring_push(&r, au, sizeof au);
+  CHECK(!monitor_view_read(&g, &r, 7, &saved, 0, out, 6));
+  // Tail bytes across an IDR boundary still come from the ring, including the new IDR.
+  CHECK(monitor_view_open(&g, &r, 7, 20, 7, 18, true, 8, &v) && v.incremental && v.end == 24);
+  // A P-only cache cannot bootstrap a cold decoder; an established reference cursor may continue.
+  g.wait_idr = true; g.stream_only = true; g.aus[0].idr = false;
+  CHECK(!monitor_view_open(&g, &r, 7, 20, 0, 0, false, 8, &v));
+  CHECK(!monitor_view_open(&g, &r, 7, 20, 8, 18, true, 8, &v));
+  CHECK(monitor_view_open(&g, &r, 7, 20, 7, 18, true, 8, &v) && v.incremental);
+  CHECK(!monitor_view_open(&g, &r, 7, 20, 7, 18, true, 0, &v));
+  saved = v;
+  // A new mirror configuration cancels old views and drops all old reference bytes.
+  gop_set_config(&g, cfg, sizeof cfg, 30); video_ring_init(&r, ring, sizeof ring);
+  CHECK(g.used == 0 && g.n == 0 && g.wait_idr && !g.stream_only);
+  CHECK(!monitor_view_read(&g, &r, 8, &saved, 18, out, 1));
+  CHECK(gop_push(&g, au, sizeof au, false, 31) == -1);
+  video_ring_push(&r, au, sizeof au);  // mirror bytes may arrive before its first usable IDR
+  CHECK(!monitor_view_open(&g, &r, 8, 31, 7, 0, true, 8, &v));
+  gop_push(&g, au, sizeof au, true, 32); video_ring_push(&r, au, sizeof au);
+  CHECK(monitor_view_open(&g, &r, 8, 32, 7, 0, true, 8, &v) && !v.incremental && v.start == 6);
 }
 
 static void test_gop_view(void) {
@@ -339,6 +388,7 @@ int main(void) {
   test_bplist_overflow();
   test_gop();
   test_gop_view();
+  test_monitor_windows();
   test_gop_continuation();
   test_video_ring();
   test_chunker();

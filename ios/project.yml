@@ -41,7 +41,7 @@ targets:
       properties:
         CFBundleDisplayName: ESP32 Agent 15
         CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "13"
+        CFBundleVersion: "14"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: 接收开发板的视频并连接局域网运维服务。

@@ -30,7 +30,7 @@ const long MOVE_LIMIT = 4096;  // worst case ~3.3 s, safely below the 8 s watchd
 #endif
 
 // Explicit runtime marker: ino timestamps can be cached when only a .cpp changes.
-static const char *firmwareRevision = "wifi-video-power-v1";
+static const char *firmwareRevision = "wifi-video-window-v2";
 const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the board instead of staying offline
 static uint32_t usbBootWaitMs;
 static bool usbConfiguredAtBoot;

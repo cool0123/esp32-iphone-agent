@@ -2,15 +2,9 @@
 // or every access unit while `stream on`. Also runs `bench` and computes the video stats.
 #pragma once
 #include <Arduino.h>
-#include "src/video/gop.h"
+#include "src/video/monitor.h"
 
-// A cold decoder starts from the GOP; a running one follows the independent rolling byte cursor.
-struct MonitorView {
-  gop_view prefix;
-  uint64_t start, end;
-  uint32_t epoch, captured_ms;
-  bool incremental;
-};
+using MonitorView = video_monitor_view;
 bool video_monitor_open(uint32_t epoch, uint64_t offset, bool cursor, MonitorView *view);
 bool video_monitor_read(const MonitorView *view, uint64_t offset, uint8_t *out, size_t len);
 

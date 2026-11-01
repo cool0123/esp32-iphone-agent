@@ -223,6 +223,10 @@ bool video_begin() {
 void video_on_config(const uint8_t *sps_pps, size_t len) {
   if (!ready) return;
   xSemaphoreTake(lock, portMAX_DELAY);
+  // A new encoder configuration is a new reference chain, even within the same board boot.
+  monitorEpoch++;
+  video_ring_init(&monitorRing, monitorRing.arena, monitorRing.cap);
+  monitorAt = 0;
   gop_set_config(&gop, sps_pps, len, millis());
   xSemaphoreGive(lock);
 }
@@ -279,13 +283,8 @@ void video_bench(const String &id, uint32_t kb) { request(id, true, kb); }
 bool video_monitor_open(uint32_t epoch, uint64_t offset, bool cursor, MonitorView *view) {
   if (!ready || !monitorRing.cap) return false;
   xSemaphoreTake(lock, portMAX_DELAY);
-  *view = {};
-  view->epoch = monitorEpoch;
-  view->end = monitorRing.end;
-  view->captured_ms = monitorAt;
-  view->incremental = cursor && epoch == monitorEpoch && video_ring_read(&monitorRing, offset, nullptr, 0);
-  bool ok = view->incremental || gop_view_open(&gop, &view->prefix);
-  if (ok) view->start = view->incremental ? offset : view->end - view->prefix.bytes;
+  bool ok = monitor_view_open(&gop, &monitorRing, monitorEpoch, monitorAt,
+                              epoch, offset, cursor, 128 * 1024, view);
   xSemaphoreGive(lock);
   return ok;
 }
@@ -293,9 +292,7 @@ bool video_monitor_open(uint32_t epoch, uint64_t offset, bool cursor, MonitorVie
 bool video_monitor_read(const MonitorView *view, uint64_t offset, uint8_t *out, size_t len) {
   if (!ready || offset < view->start || offset > view->end || len > view->end - offset) return false;
   xSemaphoreTake(lock, portMAX_DELAY);
-  bool ok = view->incremental
-    ? video_ring_read(&monitorRing, offset, out, len)
-    : gop_view_read(&gop, &view->prefix, (size_t)(offset - view->start), out, len);
+  bool ok = monitor_view_read(&gop, &monitorRing, monitorEpoch, view, offset, out, len);
   xSemaphoreGive(lock);
   return ok;
 }

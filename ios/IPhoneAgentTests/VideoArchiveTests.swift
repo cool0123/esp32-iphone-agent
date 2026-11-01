@@ -102,12 +102,23 @@ final class VideoArchiveTests: XCTestCase {
         XCTAssertTrue(feed.live)
         feed.videoNetworkFailed(invalidChain: false)
         XCTAssertFalse(feed.live)
-        XCTAssertEqual(feed.streamID, stream)
+        XCTAssertGreaterThan(feed.streamID, stream)  // callback identity changes; references stay in the decoder
         XCTAssertEqual(feed.frame, Data([1]))
         XCTAssertEqual(feed.capturedAt, stamp)
         // A successful empty response can verify connectivity but cannot reset the source age.
         feed.acceptWiFi(.init(units: [], restarted: false, boardMs: 0), requestStarted: now())
         XCTAssertEqual(feed.capturedAt, stamp)
+        XCTAssertFalse(feed.live)
+        XCTAssertFalse(feed.networkReady)
+        let unit = AccessUnit(data: Data(), idr: true, config: false, snap: true, boardMs: 0)
+        // A delayed callback from before the transport failed must not reauthorize the old frame.
+        feed.publish(.init(jpeg: Data([2]), width: 32, height: 32, decodeMs: 0, unit: unit, streamID: stream))
+        XCTAssertEqual(feed.frame, Data([1]))
+        XCTAssertFalse(feed.live)
+        feed.acceptWiFi(.init(units: [unit], restarted: false, boardMs: 0), requestStarted: now())
+        XCTAssertFalse(feed.live)  // accepting bytes alone is still insufficient
+        feed.publish(.init(jpeg: Data([3]), width: 32, height: 32, decodeMs: 0, unit: unit, streamID: feed.streamID))
+        XCTAssertTrue(feed.live)
         feed.videoNetworkFailed(invalidChain: true)
         XCTAssertNil(feed.frame)
         XCTAssertGreaterThan(feed.streamID, stream)
