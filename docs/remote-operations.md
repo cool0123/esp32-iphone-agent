@@ -355,5 +355,38 @@ no fresh image is available and the signing service is not running, so the owner
 fresh-image-guided installation/testing can continue. Experimental events remain disabled, OTA is off and
 radio preference is balance. Check `build/reconnect-recovery/verification.json` for CI and evidence updates.
 
+**Build 11 installation and first-launch replay are now verified.** Authenticated hello reports 1.0.11 at
+`1793490921.8557048`. Signed IPA: 432,934 bytes, SHA256
+`1965287fd1aa6a8519827fe37db4df8314563c763b7eebc4b3e1df6dfab3c887`. Existing configuration/Key survived, and
+the phone's official DeepSeek red-image check again returned red / reasoning_chars=0. All three build 11
+workflows succeeded (`41253448396`, `41253448449`, `41253448416`); each simulator suite passed 102 tests.
+
+The complete GOP was still retained before launch (`ov=0,vwait=0,gop≈1.92 MB`). Logs show command readiness
+at `23:55:23.132Z`, phone-issued OFF/ON and `video forwarding restarted after link readiness` at
+`23:55:23.507Z`. The desktop never restarted forwarding or requested snap/keyframe; its second BLE central
+was removed during catch-up. Native source age fell from ~511 s through 270/216/147/83 s, with live=false
+while stale. First observed live: epoch `1793491055.8851626`, source age **0.3091 s**, ~134.03 s after hello.
+A complete native screenshot is saved. This verifies first-launch automatic replay/catch-up, not every
+reconnect or execution of the firmware's rapid-toggle cancellation branch.
+
+A later actual switcher force-quit removed the Agent card and took Ops offline without rebooting the board.
+Mirrored source updates then became intermittent/stale (board connected/streaming transitions). Guarded
+desktop HID cancelled relaunch attempts, so **repeated process-restart recovery remains unverified**.
+The owner needs only to open Agent manually to continue this trial while preserving the existing mirror.
+No desktop forwarding restart, new mirror session or autonomous task was used during this trial.
+
+The external desktop `agent_runner/lan_probe.py` now retains valid decoder references/cursor on stale source,
+while continuing to reject images older than 3 s; corrupt/inconsistent input still resets it. A real H.264
+red-prefix → idle → blue-predictive-suffix regression proves same-process/cursor recovery and fresh blue
+output. All 20 desktop monitor/pointer tests passed. Restarting the corrected probe did not establish
+sustained fresh source, so the mirror stalls are not claimed fixed.
+
+Brownout count remains 23, USB/Wi-Fi are normal, and the experimental channel stays disabled. New BLE
+connections actually read `ble.tx=9` and `power status.ble_tx_dbm=9`, despite the earlier 0 dBm readback;
+the cause is unverified and the earlier value must not be presented as current. No new power adjustment
+or board flash was done in this trial. Supply, long-term stability and missing-IDR cold recovery remain
+unresolved. Evidence: `build/reconnect-recovery/verification.json`; self-review only, no independent
+second-review completion claimed.
+
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
