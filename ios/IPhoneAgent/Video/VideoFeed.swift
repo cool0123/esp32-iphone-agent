@@ -75,6 +75,8 @@ extension ScreenSource {
     private var wifiGeneration = 0
     private var wifiSession: URLSession?
     private(set) var transport = "ble"
+    private(set) var networkReady = true
+    private let archive = VideoArchive()
 
     init() {
         decoder.onFrame = { [weak self] f in DispatchQueue.main.async { self?.publish(f) } }
@@ -100,7 +102,7 @@ extension ScreenSource {
     }
 
     var live: Bool {
-        mirroring && frame != nil && !broken && capturedAt > 0 && now() - capturedAt < 3 && (device?.connected ?? false)
+        networkReady && mirroring && frame != nil && !broken && capturedAt > 0 && now() - capturedAt < 3 && (device?.connected ?? false)
     }
 
     /// Frame width / height (portrait iPhone as a fallback).
@@ -257,13 +259,13 @@ extension ScreenSource {
         wifiGeneration += 1
         wifiJob?.cancel(); wifiJob = nil
         wifiSession?.invalidateAndCancel(); wifiSession = nil
-        transport = "ble"
+        transport = "ble"; networkReady = true
     }
 
     private func startWiFi(_ endpoint: VideoEndpoint, link: Int) {
         stopWiFi()
         assembler.reset(); invalidateVideo()
-        transport = "wifi"; streamOn = true
+        transport = "wifi"; streamOn = true; networkReady = false
         note = "waiting for a complete keyframe over Wi-Fi"
         let generation = wifiGeneration
         let config = URLSessionConfiguration.ephemeral
@@ -275,6 +277,8 @@ extension ScreenSource {
         DebugLog.write("Wi-Fi video started after link readiness; waiting for live source")
         wifiJob = Task { [weak self] in
             var endpoint = endpoint, cursor = VideoCursor(), renewed = now()
+            var saved = await self?.archive.load(host: endpoint.base.absoluteString)
+            if let saved { cursor = saved.cursor }
             var failures = 0
             while !Task.isCancelled {
                 guard let self, self.wifiGeneration == generation, let device = self.device,
@@ -294,23 +298,37 @@ extension ScreenSource {
                     guard let response = response as? HTTPURLResponse else { throw DeviceError(message: "invalid video response") }
                     if response.statusCode == 401 {
                         renewed = 0
-                        throw DeviceError(message: "video credential expired")
+                        throw VideoHTTPUnavailable()
                     }
+                    guard response.statusCode == 200 else { throw VideoHTTPUnavailable() }
                     let batch = try cursor.accept(bytes, response: response)
+                    // The live board must first accept this boot epoch and exact byte cursor. Only
+                    // then may disk references enter the decoder; a board restart sends a new prefix.
+                    if let restored = saved, !batch.restarted {
+                        DebugLog.write("video: board accepted saved cursor; replaying local references")
+                        var replayCursor = VideoCursor()
+                        for record in restored.records {
+                            let prefix = try replayCursor.accept(record.bytes, response: record.response)
+                            self.acceptWiFi(prefix, requestStarted: record.started, emit: false)
+                        }
+                    }
+                    saved = nil
                     self.acceptWiFi(batch, requestStarted: started)
                     let acceptedStream = self.streamID
+                    await self.archive.append(.init(host: endpoint.base.absoluteString, started: started,
+                                                    response: response, bytes: bytes), restarted: batch.restarted)
                     // Drain this batch before fetching another: bounded queue/memory, final image only.
                     await withCheckedContinuation { c in self.decoder.queue.async { c.resume() } }
-                    if self.streamID != acceptedStream { cursor = VideoCursor() }
+                    if self.streamID != acceptedStream { cursor = VideoCursor(); self.networkReady = false }
                     failures = 0
                     try await Task.sleep(nanoseconds: 100_000_000)
                 } catch {
                     if Task.isCancelled || self.wifiGeneration != generation { return }
                     failures += 1
-                    // A 503 (missing IDR) or temporary network failure must not make cached pictures fresh.
-                    self.note = "Wi-Fi video waiting for a complete reference chain"
-                    cursor = VideoCursor()
-                    self.invalidateVideo()
+                    self.videoNetworkFailed(invalidChain: !(error is URLError || error is VideoHTTPUnavailable))
+                    if !(error is URLError || error is VideoHTTPUnavailable) {
+                        cursor = VideoCursor(); saved = nil
+                    }
                     if failures == 1 { DebugLog.write("Wi-Fi video interrupted; input remains blocked until fresh decoding") }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
@@ -318,17 +336,26 @@ extension ScreenSource {
         }
     }
 
-    func acceptWiFi(_ batch: VideoBatch, requestStarted: Double) {
+    func videoNetworkFailed(invalidChain: Bool) {
+        // A transport interruption does not consume cursor bytes. Preserve references, but block HID
+        // immediately, even if the previously shown frame is less than three seconds old.
+        networkReady = false
+        note = "Wi-Fi video interrupted; waiting for a verified source"
+        if invalidChain { invalidateVideo() }
+    }
+
+    func acceptWiFi(_ batch: VideoBatch, requestStarted: Double, emit: Bool = true) {
         // Anchor to request start, not completion: transfer latency cannot rejuvenate history.
         let offset = requestStarted - Double(batch.boardMs) / 1000
         clockOffset = min(clockOffset ?? offset, offset)
         if batch.restarted { invalidateVideo() }
         if batch.units.contains(where: { $0.idr }) { waitingForIDR = false }
         guard !waitingForIDR else { return }
+        if emit { networkReady = true }
         let stream = streamID
         decoder.queue.async { [decoder] in
             for (i, unit) in batch.units.enumerated() {
-                decoder.decode(unit, streamID: stream, emit: i == batch.units.count - 1)
+                decoder.decode(unit, streamID: stream, emit: emit && i == batch.units.count - 1)
             }
         }
     }
