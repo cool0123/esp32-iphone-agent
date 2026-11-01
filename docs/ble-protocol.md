@@ -147,9 +147,39 @@ marker wifi-video-window-v2, SHA256 767467e03c935c31cb73f6975dadf242479e36efaaaf
 After one upload timeout, retry with phone polling paused returned0; stream configuration was restored.
 Brownouts rose 24→25 around this reboot;
 supply remains unresolved. USB boot configuration was observed after130ms; actual peer TX reads0dBm.
-The current mirror is idle with no GOP; a system mirror restart is required for native acceptance.
+At that deployment the mirror was idle with no GOP; the follow-up below records subsequent acceptance.
 Keyframe experiments remain disabled, OTA off, coexistence balanced. Host/simulator passes and deployment
 alone do not establish P-only recovery, independent task success, or long-duration supply stability.
+
+## Build 14/15 native follow-up (2026-11-01)
+
+After the owner restarted system mirroring, build 14 produced native live screenshots. Independent
+read-only window checks downloaded about 283 KB in 3 batches and 1,483,625 bytes in 12 batches,
+including continuation before the 1 MB ring; final window source ages were 27 ms and 125 ms. Native
+screenshots remained available. The desktop reader was stopped for the larger diagnostic to stay
+within the two HTTP sockets; an earlier three-reader attempt was disconnected.
+
+Monitor off/on rejected stale screenshot requests (409) and resumed: first observed screenshot 200
+about 3 s after reopening; both live telemetry and screenshot success observed at 6.365 s. Telemetry
+can lag, so these are observation timings. After a real force-quit and confirmed Ops offline, one
+complete-GOP cache relaunch accepted the saved cursor at 13:44:07.671Z and produced fresh native
+output 18.772 s after hello. Same original mirror, no board reboot; bo remained 25. These are separate
+trials, not controlled acceleration ratios or independent agent tasks.
+
+Later a queued HTTP request exposed a clock bug: request-start minus server uptime is a LOWER bound,
+but min retained the worst delay. Build 15 keeps the greatest conservative HTTP bound separately from
+BLE's receive-time upper bound. Metadata/empty responses never republish a frame, and the 3 s input
+limit remains. Commit 970ac869dc2e7f74dd781678a14d27eb26f376fb, authenticated 1.0.15 hello
+1793541826.4836347; all three workflows passed, both simulator suites 114 tests. Regression covers
+slow/fast requests, historical pictures, BLE contamination, empty responses and transport reset.
+
+After upgrading, build 15 accepted saved references and produced native live output (age 0.320 s)
+while the board was P-only (ov=1,vwait=1), after the App was brought to foreground. This is an observed
+recovery path, not the following controlled force-quit trial: after that trial actually closed the App
+and Ops went offline, the mirror stopped sending video (ap=connected,fps=0). Both readers have no
+fresh source; HID is blocked. That controlled P-only trial is BLOCKED, not passed. Reopen the App
+without changing system mirroring first to preserve the experiment. No autonomous tasks ran; power
+root cause and background reconnect reliability remain unresolved. bo stayed 25; self-review only.
 
 ## net (JSON)
 Read: `{"mode":"ap","ssid":"ESP32Agent-1A2B","pass":"<random 12 chars>","ip":"192.168.4.1"}`

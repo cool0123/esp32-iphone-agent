@@ -471,9 +471,36 @@ system mirror keyframe; the failed experimental reverse-channel path remains dis
 767467e03c935c31cb73f6975dadf242479e36efaaaf237b7639e07affb9f5c0). A prior upload timed out;
 retry with phone video polling paused succeeded and stream mode was restored. Brownout count rose
 24→25 at reboot. Actual peer TX0dBm and USB boot wait130ms are confirmed; OTA off, keyframe disabled,
-coexistence balanced. The mirror is now idle/empty and needs a system restart before fresh native
-window/cache acceptance can continue. Power root cause is unresolved and requires physical evidence. Automatic tasks stayed stopped; no independent reviewer
+coexistence balanced. The mirror was idle/empty at that deployment; subsequent native acceptance is
+recorded below. Power root cause is unresolved and requires physical evidence. Automatic tasks stayed stopped; no independent reviewer
 completion is claimed.
+
+**Subsequent native acceptance and build 15 clock correction (2026-11-01).**
+After system mirror restart, build 14 showed native fresh output; read-only diagnostic downloads
+advanced about 283 KB in 3 windows and 1,483,625 bytes in 12 windows (including GOP continuation
+before the 1 MB ring). Final-window source ages were 27/125 ms. Native screenshots stayed available;
+the desktop reader was stopped for the large diagnostic because three readers could exhaust the two
+board HTTP sockets. Monitor off/on blocked old screenshots with409; first screenshot200 was observed
+2.653 s after reopening, and both live telemetry/screenshot success at6.365 s (telemetry can lag).
+A real force-quit/confirmed Ops offline/relaunch in the original mirror accepted the saved cursor and
+replayed local references: hello1793540644.2349064 to first observed live18.772 s, source age1.943 s.
+The board did not restart; bo25. This one complete-GOP trial is distinct from P-only acceptance.
+
+Later HTTP queue latency permanently depressed the clock estimate: request-start minus server uptime
+is a lower bound, so retaining min was incorrect. Build 15 uses the greatest conservative HTTP bound,
+separate from BLE's upper bound. It does not loosen3 s, republish metadata/empty responses or redate
+historical images. Commit970ac869dc2e7f74dd781678a14d27eb26f376fb; authenticated1.0.15 hello
+1793541826.4836347; all three workflows passed, both simulator suites114 tests. Regression covers
+slow/fast requests, BLE contamination, old pictures, empty responses and reset. Signed IPA468703 bytes,
+SHA256f3f8c8d074ed943090ce543d841d90e6526f76a19e8f09f0dc442b3267a157ea.
+
+Build15 initially reconnected repeatedly in background. After foregrounding it produced a native fresh
+frame (0.320 s) while the board was P-only (ov1,vwait1) in the same mirror. A subsequent controlled
+force-quit confirmed Ops offline, but the mirror stopped delivering video (ap=connected,fps0). Both
+readers now lack a fresh source, so HID is blocked. That controlled P-only trial is BLOCKED, not passed;
+owner must open the App without changing system mirroring first to preserve the test. No autonomous
+task ran. Power root cause/background reliability remain unresolved; bo stayed25, self-review only.
+Evidence and historical failures are retained in verification.json.
 
 Remote management requires the app to be running. iOS may suspend network activity when the app is not kept
 active by the board's BLE connection; an offline status is then expected, not a firmware failure.
