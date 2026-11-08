@@ -30,6 +30,7 @@ jobs:
           name: IPhoneAgent-iOS15
           path: build/package/IPhoneAgent-iOS15-unsigned.ipa
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: legacy-build-log
           path: build-legacy.log

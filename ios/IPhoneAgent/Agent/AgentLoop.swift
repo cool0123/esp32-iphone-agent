@@ -200,7 +200,7 @@ extension Pointer: Gestures {}
             // The actor alone gets the 0-1000 grid over its screenshot; the trace keeps the plain frame.
             let grid = role == "actor"
             reply = try await llm.chat(system: system, text: grid ? prompt + ScreenGrid.note : prompt,
-                                       image: grid ? ScreenGrid.overlay(frame) : frame,
+                                       image: grid ? frame.map(ScreenGrid.overlay) : frame,
                                        maxTokens: Self.maxTokens[role] ?? 1000, temperature: temperature)
         } catch {
             guard retryTimeout, ModelRequestFailure.isTimeout(error), !Task.isCancelled else { throw error }
