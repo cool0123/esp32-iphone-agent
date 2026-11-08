@@ -1,4 +1,42 @@
 import Foundation
+import UIKit
+
+/// A 0-1000 coordinate grid drawn over the actor's screenshot. In a desktop test with the app's own actor prompt, on
+/// the Home Screen, it cut the median error of tap points on 17 icons from 15 to 12 px and hit all 17 icons.
+/// Only the actor sees it; the trace keeps the plain frame. Not yet checked on text-heavy screens.
+enum ScreenGrid {
+    static let note = "\n\nThe screenshot has a yellow 0-1000 grid (a line every 100 units, labelled along its top and left edges). "
+        + "Give tap coordinates in that same 0-1000 scale, at the centre of the target's artwork, not its text label."
+
+    static func overlay(_ jpeg: Data) -> Data {
+        guard let image = UIImage(data: jpeg) else { return jpeg }
+        let size = image.size
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let yellow = UIColor(red: 1, green: 0.9, blue: 0, alpha: 1)
+        let labels: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11, weight: .semibold),
+                                                     .foregroundColor: yellow]
+        let rendered = renderer.image { ctx in
+            image.draw(at: .zero)
+            let cg = ctx.cgContext
+            cg.setStrokeColor(yellow.withAlphaComponent(0.5).cgColor)
+            cg.setLineWidth(1)
+            for k in 0...10 {
+                let x = CGFloat(k) / 10 * size.width, y = CGFloat(k) / 10 * size.height
+                cg.move(to: CGPoint(x: x, y: 0)); cg.addLine(to: CGPoint(x: x, y: size.height))
+                cg.move(to: CGPoint(x: 0, y: y)); cg.addLine(to: CGPoint(x: size.width, y: y))
+            }
+            cg.strokePath()
+            for k in 0...10 {
+                let text = NSString(string: "\(k * 100)")
+                text.draw(at: CGPoint(x: CGFloat(k) / 10 * size.width + 2, y: 2), withAttributes: labels)
+                text.draw(at: CGPoint(x: 2, y: CGFloat(k) / 10 * size.height + 2), withAttributes: labels)
+            }
+        }
+        return rendered.jpegData(compressionQuality: 0.92) ?? jpeg
+    }
+}
 
 /// The screen feed is gone; acting now would be guessing.
 struct BlindError: LocalizedError {
@@ -159,7 +197,10 @@ extension Pointer: Gestures {}
         defer { reporting?.onProgress = nil }
         let reply: ChatResult
         do {
-            reply = try await llm.chat(system: system, text: prompt, image: frame,
+            // The actor alone gets the 0-1000 grid over its screenshot; the trace keeps the plain frame.
+            let grid = role == "actor"
+            reply = try await llm.chat(system: system, text: grid ? prompt + ScreenGrid.note : prompt,
+                                       image: grid ? ScreenGrid.overlay(frame) : frame,
                                        maxTokens: Self.maxTokens[role] ?? 1000, temperature: temperature)
         } catch {
             guard retryTimeout, ModelRequestFailure.isTimeout(error), !Task.isCancelled else { throw error }
@@ -182,6 +223,11 @@ extension Pointer: Gestures {}
     func run() async {
         var failures = 0
         do {
+            // The gate holds while this app is in front. If it held, the first plan must read a frame from after
+            // the app left, not the app's last frame. A gate that did not hold needs no wait.
+            let gateStart = now()
+            try await gate?()
+            if now() - gateStart > 0.1 { await screen?.afterAction(since: now()) }
             try await replan()
             for _ in 0..<maxSteps {
                 do {
@@ -313,11 +359,11 @@ extension Pointer: Gestures {}
     /// The previous round changed nothing on screen, so a tap may have landed off target.
     private var missed: Bool { steps.last?["changed"] == .bool(false) }
 
-    /// True when the actor picks the same action as its last limit-1 moves and the last one did nothing.
+    /// True when the actor repeats the same move (Actions.sameMove) for its last limit-1 moves and the last one did nothing.
     /// Repeating a move that still changes the screen (e.g. scrolling down a long list) is progress, not a loop.
     func repeating(_ act: JObject, limit: Int = 3) -> Bool {
         let moves = steps.filter { $0["plan"] == nil }.suffix(limit - 1)
-        return moves.count == limit - 1 && moves.allSatisfy { Actions.key($0) == Actions.key(act) }
+        return moves.count == limit - 1 && moves.allSatisfy { Actions.sameMove($0, act) }
             && moves.last?["changed"] != .bool(true)
     }
 
@@ -364,7 +410,7 @@ extension Pointer: Gestures {}
             reply = text
             var acts: [JObject]
             do { acts = try Actions.parseActions(text) } catch { continue }
-            if missed, let last = steps.last, Actions.key(acts[0]) == Actions.key(last) {  // same move that did nothing
+            if missed, let last = steps.last, Actions.sameMove(acts[0], last) {  // same move that did nothing
                 prompt += "\n\nYou just proposed \(PyJSON.dumps(Actions.key(acts[0]))) again, but it changed nothing last "
                     + "time. Choose a different action (another position, a shorter swipe, or another way)."
                 continue

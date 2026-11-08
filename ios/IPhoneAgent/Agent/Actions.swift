@@ -69,6 +69,20 @@ enum Actions {
     /// The action itself, without thoughts, timings and other bookkeeping.
     static func key(_ step: JObject) -> JObject { step.without(meta) }
 
+    /// The same move: same action and arguments, except that 0–1000 coordinates may differ by up to `slack`.
+    /// The actor often nudges a target by a few units and repeats the same miss, which an exact match misses.
+    static func sameMove(_ a: JObject, _ b: JObject, slack: Double = 25) -> Bool {
+        guard a["action"] == b["action"] else { return false }
+        for arg in actions[a["action"]?.str ?? ""] ?? [] {
+            if let x = a[arg]?.double, let y = b[arg]?.double {
+                if abs(x - y) > slack { return false }
+            } else if a[arg] != b[arg] {
+                return false
+            }
+        }
+        return true
+    }
+
     // MARK: - helpers
 
     private static func trim(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }

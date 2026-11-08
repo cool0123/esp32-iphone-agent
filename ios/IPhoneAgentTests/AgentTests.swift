@@ -123,6 +123,15 @@ import XCTest
         XCTAssertTrue(agent.repeating(swipe))
     }
 
+    func testRepeatingANudgedTapOnTheSameTargetIsStuck() {
+        let agent = AgentLoop(phone: nil, screen: nil, actor: nil, planner: nil, trace: nil)
+        let tap: JObject = ["action": .str("tap"), "x": .int(500), "y": .int(120)]
+        agent.steps = [tap.merging(["changed": .bool(false)]),
+                       ["action": .str("tap"), "x": .int(503), "y": .int(118), "changed": .bool(false)]]
+        XCTAssertTrue(agent.repeating(tap))  // a few units of nudge is the same target
+        XCTAssertFalse(agent.repeating(["action": .str("tap"), "x": .int(700), "y": .int(120)]))  // another target
+    }
+
     func testPreciseTapFlag() throws {
         XCTAssertEqual(try Actions.parseCommand("tap 120 640 precise"),
                        ["action": .str("tap"), "x": .int(120), "y": .int(640), "precise": .bool(true)])

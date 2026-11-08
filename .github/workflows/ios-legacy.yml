@@ -7,6 +7,8 @@ jobs:
   legacy:
     runs-on: macos-15
     timeout-minutes: 30
+    permissions:
+      contents: write  # attach the IPA to a prerelease so it is downloadable without a login
     steps:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
@@ -28,7 +30,15 @@ jobs:
           name: IPhoneAgent-iOS15
           path: build/package/IPhoneAgent-iOS15-unsigned.ipa
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: legacy-build-log
           path: build-legacy.log
+      - name: Attach IPA to a prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "legacy-${{ github.run_number }}" \
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --prerelease --title "iOS 15 build ${{ github.run_number }}" \
+            --notes "Unsigned IPA from ${{ github.ref_name }}" \
+            build/package/IPhoneAgent-iOS15-unsigned.ipa
