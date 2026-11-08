@@ -8,6 +8,12 @@ enum ScreenGrid {
     static let note = "\n\nThe screenshot has a yellow 0-1000 grid (a line every 100 units, labelled along its top and left edges). "
         + "Give tap coordinates in that same 0-1000 scale, at the centre of the target's artwork, not its text label."
 
+    static func prompt(_ base: String) -> String {
+        let marker = "\n\nNext action?"
+        guard let range = base.range(of: marker, options: .backwards) else { return base + note }
+        return base.replacingCharacters(in: range, with: note + marker)
+    }
+
     static func overlay(_ jpeg: Data) -> Data {
         guard let image = UIImage(data: jpeg) else { return jpeg }
         let size = image.size
@@ -199,7 +205,7 @@ extension Pointer: Gestures {}
         do {
             // The actor alone gets the 0-1000 grid over its screenshot; the trace keeps the plain frame.
             let grid = role == "actor"
-            reply = try await llm.chat(system: system, text: grid ? prompt + ScreenGrid.note : prompt,
+            reply = try await llm.chat(system: system, text: grid ? ScreenGrid.prompt(prompt) : prompt,
                                        image: grid ? frame.map(ScreenGrid.overlay) : frame,
                                        maxTokens: Self.maxTokens[role] ?? 1000, temperature: temperature)
         } catch {

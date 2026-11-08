@@ -132,6 +132,12 @@ import XCTest
         XCTAssertFalse(agent.repeating(["action": .str("tap"), "x": .int(700), "y": .int(120)]))  // another target
     }
 
+    func testActorGridNotePrecedesNextAction() {
+        let prompt = ScreenGrid.prompt("Goal: tap an icon.\n\nNext action?")
+        XCTAssertTrue(prompt.contains("0-1000 grid"))
+        XCTAssertTrue(prompt.hasSuffix("\n\nNext action?"))
+    }
+
     func testPreciseTapFlag() throws {
         XCTAssertEqual(try Actions.parseCommand("tap 120 640 precise"),
                        ["action": .str("tap"), "x": .int(120), "y": .int(640), "precise": .bool(true)])
