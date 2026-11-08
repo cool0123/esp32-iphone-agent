@@ -136,6 +136,8 @@ import XCTest
         let prompt = ScreenGrid.prompt("Goal: tap an icon.\n\nNext action?")
         XCTAssertTrue(prompt.contains("0-1000 grid"))
         XCTAssertTrue(prompt.hasSuffix("\n\nNext action?"))
+        let history = "\n\nRecent actions:\n{\"action\": \"tap\"}\n\nNext action?"
+        XCTAssertTrue(ScreenGrid.prompt("Goal: tap an icon." + history).hasSuffix(history))
     }
 
     func testPreciseTapFlag() throws {

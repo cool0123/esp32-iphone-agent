@@ -9,9 +9,13 @@ enum ScreenGrid {
         + "Give tap coordinates in that same 0-1000 scale, at the centre of the target's artwork, not its text label."
 
     static func prompt(_ base: String) -> String {
-        let marker = "\n\nNext action?"
-        guard let range = base.range(of: marker, options: .backwards) else { return base + note }
-        return base.replacingCharacters(in: range, with: note + marker)
+        // Keep the recent-action suffix byte-for-byte intact: tests and the actor rely on its existing format.
+        for marker in ["\n\nRecent actions:", "\n\nNext action?"] {
+            if let range = base.range(of: marker, options: .backwards) {
+                return base.replacingCharacters(in: range, with: note + marker)
+            }
+        }
+        return base + note
     }
 
     static func overlay(_ jpeg: Data) -> Data {
