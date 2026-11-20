@@ -131,6 +131,35 @@ def test_task_submit_status_stop_round_trip_and_reconnect():
             assert c.get(f"/api/tasks/{TASK_ID}", headers=ADMIN).status_code == 409
 
 
+def test_reconnect_reports_phone_task_result_without_resubmission():
+    completed = {"task_id": TASK_ID, "state": "completed", "steps": 2, "result": "日历已打开"}
+    with client(tasks_enabled=True) as c:
+        with c.websocket_connect("/ws/device", headers=DEVICE) as ws:
+            ws.send_json({"type": "hello", "taskProtocol": "legacy-task-v1"})
+            ws.send_json({"type": "telemetry", "taskControl": {"phone": {
+                "latest": {"task_id": TASK_ID, "state": "running"}}}})
+            status = c.get("/api/status", headers=ADMIN).json()
+            assert status["telemetry"]["taskControl"]["phone"]["latest"]["state"] == "running"
+        assert c.get(f"/api/tasks/{TASK_ID}", headers=ADMIN).status_code == 503
+        with c.websocket_connect("/ws/device", headers=DEVICE) as ws:
+            ws.send_json({"type": "hello", "taskProtocol": "legacy-task-v1"})
+            ws.send_json({"type": "telemetry", "taskControl": {"phone": {
+                "readiness": "ready", "latest": completed}}})
+            status = c.get("/api/status", headers=ADMIN).json()
+            assert status["connected"] and status["remote_tasks_supported"]
+            assert status["telemetry"]["taskControl"]["phone"]["latest"] == completed
+            responses = []
+            thread = threading.Thread(target=lambda: responses.append(c.get(f"/api/tasks/{TASK_ID}", headers=ADMIN)))
+            thread.start()
+            command = ws.receive_json()
+            assert (command["name"], command["params"]) == ("task.status", {"task_id": TASK_ID})
+            ws.send_json({"type": "result", "id": command["id"], "ok": True, "data": completed})
+            thread.join(timeout=3)
+            assert not thread.is_alive()
+            assert responses[0].status_code == 200
+            assert responses[0].json()["data"] == completed
+
+
 def test_config_round_trip_and_snapshot():
     with client() as c:
         with c.websocket_connect("/ws/device", headers=DEVICE) as ws:

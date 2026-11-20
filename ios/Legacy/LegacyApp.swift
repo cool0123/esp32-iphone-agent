@@ -172,6 +172,21 @@ enum Mood: String, Codable, Hashable {
         UIApplication.shared.isProtectedDataAvailable && board.connected && board.status?.usb == "ok" && feed.live
     }
 
+    var opsTaskTelemetry: [String: Any] {
+        let readiness: String
+        if agent.running || preparing != nil || remoteStopping || startingLocally { readiness = "busy" }
+        else if !UIApplication.shared.isProtectedDataAvailable { readiness = "protected_data_unavailable" }
+        else if UIApplication.shared.applicationState != .background { readiness = "agent_in_foreground" }
+        else if !board.connected { readiness = "board_disconnected" }
+        else if board.status?.usb != "ok" { readiness = "usb_unavailable" }
+        else if !feed.live { readiness = "no_live_frame" }
+        else if !pointer.calibrated { readiness = "not_calibrated" }
+        else { readiness = "ready" }
+        var data: [String: Any] = ["readiness": readiness]
+        if let run = remoteRun { data["latest"] = remoteStatus(run) }
+        return data
+    }
+
     private func checkRemoteInput(_ run: RemoteRun) throws {
         guard UIApplication.shared.applicationState == .background, ops.enabled, ops.acceptsTasks,
               ProcessInfo.processInfo.systemUptime < run.deadline, remoteBoardReady,
@@ -257,7 +272,7 @@ enum Mood: String, Codable, Hashable {
         return try opsTaskStatus(id: id)
     }
 
-    func cancelOpsTaskOnDisconnect() { cancelOpsTask(reason: "remote task permission or operations connection lost") }
+    func revokeOpsTasks() { cancelOpsTask(reason: "remote tasks disabled by operator") }
 
     private func cancelOpsTask(reason: String) {
         guard let run = remoteRun, run.state == "preparing" || run.state == "running" else { return }

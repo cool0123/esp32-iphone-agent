@@ -64,13 +64,13 @@ curl -H "Authorization: Bearer $OPS_ADMIN_TOKEN" \
   https://ops.example.com/api/config
 ```
 
-### iOS 15 local task debugging (candidate 1.0.17)
+### iOS 15 task control (build 17+)
 
-The older installed app does not support this protocol. Build and sign `IPhoneAgentLegacy` first. On the
-phone, enable Remote Management and the separate **允许电脑下发调试任务（本次运行）** switch once per app
-process, complete pointer calibration and leave the app in the background with the phone unlocked and
-screen mirroring running. It will reject a submission while its own UI is in the foreground rather than
-try to press Home blind. Verify on the real device that the socket survives in the background.
+Build and sign `IPhoneAgentLegacy` first. Enable Remote Management and task submission on the phone,
+complete pointer calibration, and leave the app in the background with the phone unlocked and screen
+mirroring running. The app rejects submissions while its own UI is in the foreground. Builds 17–18 need
+submission enabled once per process. From build 19, the **允许台机下发任务** preference survives an app
+restart and resets if the management address or token changes.
 
 Run `python -m hidagent.ops` in `server/` with the normal distinct tokens supplied privately and with
 `OPS_TASKS_ENABLED=1`, `OPS_PORT=3233`, `OPS_HOST=<computer LAN IPv4>`, and
@@ -81,6 +81,7 @@ other hosts are rejected. Do not run it alongside the status-only service on the
 With `OPS_ADMIN_TOKEN` provided in the local CLI process environment:
 
 ```bash
+python -m hidagent.ops_task phone
 python -m hidagent.ops_task submit '打开日历，仅确认日历页面已打开。不要修改内容。'
 python -m hidagent.ops_task status <task_id>
 python -m hidagent.ops_task stop <task_id>
@@ -91,8 +92,13 @@ accepted for preparation, not executed. Each task has a caller-generated ID, run
 seconds, and rechecks the original board link, video stream and fresh source frame before input. Stop is
 asynchronous; poll until terminal. No task queue, automatic retry or resume is provided. The phone keeps
 the latest result and duplicate IDs in memory only; if submission is uncertain, query the returned ID
-before deciding how to proceed, particularly after app relaunch. Start with disposable test pages and no
-file deletion. Do not run the desktop BLE controller and a phone task at the same time.
+before deciding how to proceed, particularly after app relaunch. As of build 19, losing the management
+WebSocket does not cancel an accepted task. The phone reconnects automatically and includes readiness
+and its latest task state in `/api/status` → `telemetry.taskControl.phone`. A stop request cannot reach
+an offline phone; reconnect and query by ID before deciding what to do. This is not task recovery after
+iOS suspends or terminates the app, nor video recovery after a board disconnect. On a real phone, test
+submit → disconnect just the management service → complete on the phone → reconnect and query the same
+ID. Start with disposable test pages and do not run the desktop BLE controller during a phone task.
 
 ### iOS 15 model API key rotation (build 18+)
 

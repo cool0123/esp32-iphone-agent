@@ -2,6 +2,30 @@ import XCTest
 @testable import IPhoneAgent
 
 @MainActor final class OpsTests: XCTestCase {
+    func testReconnectDoesNotRevokeTasksAndExplicitDisableDoes() throws {
+        let suite = "ops-reconnect-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let app = TaskOpsStub()
+        let ops = OpsController(app: app, defaults: defaults)
+        XCTAssertFalse(ops.acceptsTasks)
+        ops.enabled = true
+        ops.acceptsTasks = true
+        ops.start()
+        XCTAssertEqual(app.revocations, 0)
+        XCTAssertTrue(OpsController(app: app, defaults: defaults).acceptsTasks)
+
+        ops.enabled = false
+        XCTAssertEqual(app.revocations, 1)
+        ops.enabled = true
+        ops.allowsKeyRotation = true
+        ops.endpoint = "https://ops.example.com"
+        XCTAssertFalse(ops.acceptsTasks)
+        XCTAssertFalse(ops.allowsKeyRotation)
+        XCTAssertEqual(app.revocations, 2)
+        XCTAssertFalse(OpsController(app: app, defaults: defaults).acceptsTasks)
+    }
+
     func testSocketRequiresHTTPSExceptForLocalTests() throws {
         let secure = try XCTUnwrap(OpsController.socketURL("https://ops.example.com/base"))
         XCTAssertEqual(secure.scheme, "wss")
@@ -80,4 +104,22 @@ import XCTest
         XCTAssertFalse(text.contains("not-for-remote"))
         XCTAssertFalse(text.contains("remote-secret"))
     }
+}
+
+@MainActor private final class TaskOpsStub: OpsTaskApp {
+    var revocations = 0
+    var settings: Settings { fatalError("not used by the connection lifecycle test") }
+    var board: BoardLink { fatalError("not used by the connection lifecycle test") }
+    var feed: VideoFeed { fatalError("not used by the connection lifecycle test") }
+    var agent: AgentLoop { fatalError("not used by the connection lifecycle test") }
+    var opsRecovering: Bool { false }
+    var opsNeedsHelp: Bool { false }
+    var opsTaskTelemetry: [String: Any] { [:] }
+    func setFrameMode(_ mode: FrameMode) {}
+    func say(_ text: String) {}
+    func stopAgent() async {}
+    func submitOpsTask(id: String, text: String) throws -> [String: Any] { [:] }
+    func opsTaskStatus(id: String) throws -> [String: Any] { [:] }
+    func stopOpsTask(id: String) async throws -> [String: Any] { [:] }
+    func revokeOpsTasks() { revocations += 1 }
 }

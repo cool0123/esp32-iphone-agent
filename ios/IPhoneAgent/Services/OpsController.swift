@@ -19,7 +19,8 @@ import UIKit
     func submitOpsTask(id: String, text: String) throws -> [String: Any]
     func opsTaskStatus(id: String) throws -> [String: Any]
     func stopOpsTask(id: String) async throws -> [String: Any]
-    func cancelOpsTaskOnDisconnect()
+    func revokeOpsTasks()
+    var opsTaskTelemetry: [String: Any] { get }
 }
 
 /// Only the Legacy target opts into model-key rotation (separate from task authorization).
@@ -154,18 +155,19 @@ extension AppModel: OpsApp {
 @MainActor final class OpsController: ObservableObject {
     @Published var endpoint: String { didSet {
         defaults.set(endpoint, forKey: "opsEndpoint")
-        if endpoint != oldValue { allowsKeyRotation = false; stop() }
+        if endpoint != oldValue { managementIdentityChanged() }
     } }
     @Published var token: String { didSet {
         Keychain.set(token, for: "ops-device-token")
-        if token != oldValue { allowsKeyRotation = false; stop() }
+        if token != oldValue { managementIdentityChanged() }
     } }
     @Published var enabled: Bool { didSet {
         defaults.set(enabled, forKey: "opsEnabled")
-        enabled ? start() : stop()
+        if enabled != oldValue { enabled ? start() : stop() }
     } }
-    @Published var acceptsTasks = false { didSet {
-        if !acceptsTasks { (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect() }
+    @Published var acceptsTasks: Bool { didSet {
+        defaults.set(acceptsTasks, forKey: "opsTasksEnabled")
+        if oldValue && !acceptsTasks { (app as? any OpsTaskApp)?.revokeOpsTasks() }
     } }
     @Published var allowsKeyRotation: Bool { didSet { defaults.set(allowsKeyRotation, forKey: "opsKeyRotationEnabled") } }
     var secureEndpoint: Bool { Self.socketURL(endpoint)?.scheme == "wss" }
@@ -189,6 +191,7 @@ extension AppModel: OpsApp {
         endpoint = defaults.string(forKey: "opsEndpoint") ?? ""
         token = Keychain.get("ops-device-token") ?? ""
         enabled = defaults.bool(forKey: "opsEnabled")
+        acceptsTasks = defaults.bool(forKey: "opsTasksEnabled")
         allowsKeyRotation = defaults.bool(forKey: "opsKeyRotationEnabled")
         deviceID = defaults.string(forKey: "opsDeviceID") ?? UUID().uuidString
         defaults.set(deviceID, forKey: "opsDeviceID")
@@ -215,8 +218,15 @@ extension AppModel: OpsApp {
         return c.url
     }
 
+    private func managementIdentityChanged() {
+        acceptsTasks = false
+        allowsKeyRotation = false
+        closeConnection()
+        if enabled { state = "Reconnect to apply the management settings" }
+    }
+
     func start() {
-        stop()
+        closeConnection()
         guard enabled, let app else { return }
         guard let url = Self.socketURL(endpoint), !token.isEmpty else {
             state = "Set a management URL and device token"
@@ -232,11 +242,16 @@ extension AppModel: OpsApp {
         job = Task { [weak self] in await self?.run(socket, app: app, generation: gen) }
     }
 
-    func stop() {
-        (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect()
+    private func stop() {
+        (app as? any OpsTaskApp)?.revokeOpsTasks()
+        closeConnection()
+    }
+
+    // Restarting just the transport must not interrupt a phone-local task.
+    private func closeConnection() {
         generation += 1
         job?.cancel(); telemetryJob?.cancel(); modelCheckJob?.cancel()
-        modelCheckJob = nil
+        job = nil; telemetryJob = nil; modelCheckJob = nil
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
         state = "Off"
@@ -244,14 +259,16 @@ extension AppModel: OpsApp {
 
     private func run(_ socket: URLSessionWebSocketTask, app: any OpsApp, generation gen: Int) async {
         do {
+            guard !Task.isCancelled, gen == generation else { return }
             socket.resume()
-            state = "Connected"
             var hello: [String: Any] = ["type": "hello", "device": deviceID, "app": appVersion()]
             if app is any OpsTaskApp { hello["taskProtocol"] = "legacy-task-v1" }
             if app is any OpsModelKeyApp, socket.originalRequest?.url?.scheme == "wss" {
                 hello["keyProtocol"] = "model-key-v1"
             }
             try await send(hello, on: socket)
+            guard !Task.isCancelled, gen == generation else { return }
+            state = "Connected"
             telemetryJob = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -259,7 +276,6 @@ extension AppModel: OpsApp {
                     do { try await self.sendTelemetry(on: socket) }
                     catch {
                         guard !Task.isCancelled, self.generation == gen else { break }
-                        (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect()
                         socket.cancel(with: .goingAway, reason: nil)
                         break
                     }
@@ -297,7 +313,9 @@ extension AppModel: OpsApp {
         } catch {
             guard !Task.isCancelled, enabled, gen == generation else { return }
             telemetryJob?.cancel()
-            (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect()
+            modelCheckJob?.cancel()
+            socket.cancel(with: .goingAway, reason: nil)
+            self.socket = nil
             state = "Reconnecting in 5 s"
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             if !Task.isCancelled, enabled, gen == generation { start() }
@@ -330,13 +348,18 @@ extension AppModel: OpsApp {
         if let status = app.board.status, let data = try? JSONEncoder().encode(status),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { board = object }
         let age = app.feed.capturedAt > 0 ? max(0, now() - app.feed.capturedAt) : -1
-        return ["type": "telemetry", "device": deviceID, "at": now(), "state": state,
-                "board": board,
-                "app": ["connected": app.board.connected, "mirroring": app.feed.mirroring, "frameAge": age,
-                        "running": app.agent.running, "task": app.agent.task, "steps": app.agent.steps.count,
-                        "recovering": app.opsRecovering, "needsHelp": app.opsNeedsHelp,
-                        "frameLive": app.feed.live, "decoderNote": app.feed.note, "videoTransport": app.feed.transport,
-                        "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? ""]]
+        var payload: [String: Any] = [
+            "type": "telemetry", "device": deviceID, "at": now(), "state": state, "version": appVersion(),
+            "board": board,
+            "app": ["connected": app.board.connected, "mirroring": app.feed.mirroring, "frameAge": age,
+                    "running": app.agent.running, "task": app.agent.task, "steps": app.agent.steps.count,
+                    "recovering": app.opsRecovering, "needsHelp": app.opsNeedsHelp,
+                    "frameLive": app.feed.live, "decoderNote": app.feed.note, "videoTransport": app.feed.transport,
+                    "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? ""]]
+        if let tasks = app as? any OpsTaskApp {
+            payload["taskControl"] = ["enabled": enabled && acceptsTasks, "phone": tasks.opsTaskTelemetry] as [String: Any]
+        }
+        return payload
     }
 
     private func sendTelemetry(on socket: URLSessionWebSocketTask) async throws {
@@ -351,12 +374,13 @@ extension AppModel: OpsApp {
         }
         await sendLock.lock()
         defer { sendLock.unlock() }
+        guard self.socket === socket, !Task.isCancelled else { throw CancellationError() }
         try await socket.send(.string(text))
     }
 
     private func handle(_ message: [String: Any], app: any OpsApp, socket: URLSessionWebSocketTask) async {
-        guard message["type"] as? String == "command", let id = message["id"] as? String,
-              let name = message["name"] as? String else { return }
+        guard self.socket === socket, !Task.isCancelled, message["type"] as? String == "command",
+              let id = message["id"] as? String, let name = message["name"] as? String else { return }
         do {
             let params = message["params"] as? [String: Any] ?? [:]
             let data: [String: Any]
