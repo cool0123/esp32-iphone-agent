@@ -2,8 +2,7 @@
 
 The iOS app makes an **outbound** WebSocket connection to a small management service. The phone works over
 cellular or Wi-Fi; no inbound phone listener, public ESP32 port, or computer-side agent is required.
-The service relays only status, diagnostics, screenshots, whitelisted configuration, a fixed image/model connection check, and agent stop. It never
-exposes arbitrary HID commands, the LLM API key, or the device-management token.
+The service relays status, diagnostics, screenshots, whitelisted configuration, a fixed image/model connection check, and agent stop. An opt-in iOS 15 debug mode also accepts named task submissions from the computer. It never exposes arbitrary HID commands, the LLM API key, or the device-management token.
 
 ## 1. Start the management service
 
@@ -65,15 +64,45 @@ curl -H "Authorization: Bearer $OPS_ADMIN_TOKEN" \
   https://ops.example.com/api/config
 ```
 
+### iOS 15 local task debugging (candidate 1.0.17)
+
+The older installed app does not support this protocol. Build and sign `IPhoneAgentLegacy` first. On the
+phone, enable Remote Management and the separate **允许电脑下发调试任务（本次运行）** switch once per app
+process, complete pointer calibration and leave the app in the background with the phone unlocked and
+screen mirroring running. It will reject a submission while its own UI is in the foreground rather than
+try to press Home blind. Verify on the real device that the socket survives in the background.
+
+Run `python -m hidagent.ops` in `server/` with the normal distinct tokens supplied privately and with
+`OPS_TASKS_ENABLED=1`, `OPS_PORT=3233`, `OPS_HOST=<computer LAN IPv4>`, and
+`OPS_TASK_DEVICE_IP=<iPhone LAN IPv4>`. Use a trusted test LAN, not a reverse proxy. The service listens
+on the specified LAN interface for the phone and on `127.0.0.1:3233` for admin commands; admin calls from
+other hosts are rejected. Do not run it alongside the status-only service on the same port.
+
+With `OPS_ADMIN_TOKEN` provided in the local CLI process environment:
+
+```bash
+python -m hidagent.ops_task submit '打开日历，仅确认日历页面已打开。不要修改内容。'
+python -m hidagent.ops_task status <task_id>
+python -m hidagent.ops_task stop <task_id>
+```
+
+The API uses `POST /api/tasks`, `GET /api/tasks/{task_id}`, and `POST /api/tasks/stop`; 202 means
+accepted for preparation, not executed. Each task has a caller-generated ID, runs alone for at most 180
+seconds, and rechecks the original board link, video stream and fresh source frame before input. Stop is
+asynchronous; poll until terminal. No task queue, automatic retry or resume is provided. The phone keeps
+the latest result and duplicate IDs in memory only; if submission is uncertain, query the returned ID
+before deciding how to proceed, particularly after app relaunch. Start with disposable test pages and no
+file deletion. Do not run the desktop BLE controller and a phone task at the same time.
+
 Telemetry's `app.frameAge` measures source capture age, not the time since JPEG decoding. Cached frames being
 replayed after reconnection are not fresh. `/api/frame.jpg` rejects an unavailable or stale screenshot.
 Build 4 also invalidates the reference chain on CONFIG, packet loss, reconnect or decoder failure, waits for
 a complete IDR, and rejects callbacks from older stream generations. A successful decode alone is not proof
 of image integrity; the build 3 true-device test exposed mixed historical/current reference pictures despite
 fresh timestamps, so it must not be used to certify autonomous tasks.
-The iOS 15 app shows its last agent step separately from the changing BLE status. For provisioning by the
-owner's trusted BLE debugging client, it also accepts `app ops {"endpoint":"http://LAN_HOST:8787","token":"..."}`;
-never print or persist that command with the credential. The endpoint/token remain local to the phone.
+Historical debug firmware and debug App builds accepted BLE provisioning through `app ops`. The current release
+path does not enable that relay. Configure the endpoint and token in the App UI; keep both out of command
+logs.
 
 ## Board LAN diagnostics (optional)
 

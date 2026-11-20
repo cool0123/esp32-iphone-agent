@@ -14,6 +14,33 @@ import UIKit
     func stopAgent() async
 }
 
+/// Optional task capability; the modern App does not advertise or accept this protocol yet.
+@MainActor protocol OpsTaskApp: OpsApp {
+    func submitOpsTask(id: String, text: String) throws -> [String: Any]
+    func opsTaskStatus(id: String) throws -> [String: Any]
+    func stopOpsTask(id: String) async throws -> [String: Any]
+    func cancelOpsTaskOnDisconnect()
+}
+
+struct OpsTaskRequest {
+    let id: String
+    let text: String?
+
+    init(_ params: [String: Any], submit: Bool) throws {
+        let keys: Set<String> = submit ? ["task_id", "task"] : ["task_id"]
+        guard Set(params.keys) == keys, let id = params["task_id"] as? String,
+              id.utf8.count == 32, id.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw DeviceError(message: "invalid task request")
+        }
+        self.id = id
+        if submit {
+            guard let value = (params["task"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  (1...800).contains(value.unicodeScalars.count) else { throw DeviceError(message: "invalid task text") }
+            text = value
+        } else { text = nil }
+    }
+}
+
 #if !LEGACY_IOS
 extension AppModel: OpsApp {
     var opsRecovering: Bool { recovering != nil }
@@ -98,6 +125,9 @@ extension AppModel: OpsApp {
         defaults.set(enabled, forKey: "opsEnabled")
         enabled ? start() : stop()
     } }
+    @Published var acceptsTasks = false { didSet {
+        if !acceptsTasks { (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect() }
+    } }
     @Published private(set) var state = "Off"
     let deviceID: String
 
@@ -160,6 +190,7 @@ extension AppModel: OpsApp {
     }
 
     func stop() {
+        (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect()
         generation += 1
         job?.cancel(); telemetryJob?.cancel(); modelCheckJob?.cancel()
         modelCheckJob = nil
@@ -172,12 +203,20 @@ extension AppModel: OpsApp {
         do {
             socket.resume()
             state = "Connected"
-            try await send(["type": "hello", "device": deviceID, "app": appVersion()], on: socket)
+            var hello: [String: Any] = ["type": "hello", "device": deviceID, "app": appVersion()]
+            if app is any OpsTaskApp { hello["taskProtocol"] = "legacy-task-v1" }
+            try await send(hello, on: socket)
             telemetryJob = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 5_000_000_000)
-                    guard !Task.isCancelled else { break }
-                    try? await self?.sendTelemetry(on: socket)
+                    guard let self, !Task.isCancelled, self.generation == gen else { break }
+                    do { try await self.sendTelemetry(on: socket) }
+                    catch {
+                        guard !Task.isCancelled, self.generation == gen else { break }
+                        (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect()
+                        socket.cancel(with: .goingAway, reason: nil)
+                        break
+                    }
                 }
             }
             try await sendTelemetry(on: socket)
@@ -189,7 +228,8 @@ extension AppModel: OpsApp {
                 case .data(let bytes): data = bytes
                 @unknown default: data = nil
                 }
-                guard let data, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                guard gen == generation, !Task.isCancelled,
+                      let data, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
                 if object["type"] as? String == "command", object["name"] as? String == "model.check" {
                     if modelCheckJob == nil {
                         modelCheckJob = Task { [weak self] in
@@ -211,6 +251,7 @@ extension AppModel: OpsApp {
         } catch {
             guard !Task.isCancelled, enabled, gen == generation else { return }
             telemetryJob?.cancel()
+            (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect()
             state = "Reconnecting in 5 s"
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             if !Task.isCancelled, enabled, gen == generation { start() }
@@ -271,6 +312,15 @@ extension AppModel: OpsApp {
             let params = message["params"] as? [String: Any] ?? [:]
             let data: [String: Any]
             switch name {
+            case "task.submit", "task.status", "task.stop":
+                guard let tasks = app as? any OpsTaskApp else { throw DeviceError(message: "remote tasks unsupported") }
+                let request = try OpsTaskRequest(params, submit: name == "task.submit")
+                if name == "task.submit", let text = request.text {
+                    guard acceptsTasks, enabled else { throw DeviceError(message: "remote tasks are disabled on the phone") }
+                    data = try tasks.submitOpsTask(id: request.id, text: text)
+                } else if name == "task.stop" {
+                    data = try await tasks.stopOpsTask(id: request.id)
+                } else { data = try tasks.opsTaskStatus(id: request.id) }
             case "status": data = telemetry()
             case "config.get": data = OpsConfig.get(app)
             case "config.set": data = try OpsConfig.apply(params, to: app)

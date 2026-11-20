@@ -11,8 +11,8 @@ DEVICE = {"Authorization": "Bearer device-test-token"}
 ADMIN = {"Authorization": "Bearer admin-test-token"}
 
 
-def client():
-    return TestClient(create_app("device-test-token", "admin-test-token"))
+def client(**kwargs):
+    return TestClient(create_app("device-test-token", "admin-test-token", **kwargs), client=("127.0.0.1", 50000))
 
 
 def test_config_validation_rejects_secrets_and_bad_values():
@@ -73,6 +73,62 @@ def test_model_check_relays_phone_result(ok, expected):
                 assert responses[0].json()["data"]["result"] == "image=red, reasoning_chars=0"
             else:
                 assert responses[0].json()["detail"] == "LLM HTTP 401"
+
+
+TASK_ID = "12" * 16
+TASK = {"task_id": TASK_ID, "task": "打开日历"}
+
+
+def test_task_routes_default_off_and_validate_auth_and_body():
+    with client() as c:
+        assert c.post("/api/tasks", headers=ADMIN, json=TASK).status_code == 404
+    with client(tasks_enabled=True) as c:
+        assert c.post("/api/tasks", headers=DEVICE, json=TASK).status_code == 401
+        for patch in ({"task_id": "bad"}, {"task": " "}, {"task": "x" * 801}, {"click": [0, 0]}):
+            assert c.post("/api/tasks", headers=ADMIN, json={**TASK, **patch}).status_code == 422
+        assert c.post("/api/tasks", headers=ADMIN, json=TASK).status_code == 503
+        with c.websocket_connect("/ws/device", headers=DEVICE) as ws:
+            ws.send_json({"type": "hello", "app": "old"})
+            assert c.post("/api/tasks", headers=ADMIN, json=TASK).status_code == 409
+
+
+def test_task_mode_restricts_lan_administration_and_device_source():
+    app = create_app("device-test-token", "admin-test-token", tasks_enabled=True, task_device_ip="192.168.3.16")
+    with TestClient(app, client=("192.168.3.18", 50000)) as c:
+        assert c.post("/api/tasks", headers={**ADMIN, "X-Forwarded-For": "127.0.0.1"}, json=TASK).status_code == 403
+        with pytest.raises(WebSocketDisconnect):
+            with c.websocket_connect("/ws/device", headers=DEVICE):
+                pytest.fail("unexpected device accepted")
+
+
+def test_task_submit_status_stop_round_trip_and_reconnect():
+    with client(tasks_enabled=True) as c:
+        with c.websocket_connect("/ws/device", headers=DEVICE) as ws:
+            ws.send_json({"type": "hello", "taskProtocol": "legacy-task-v1"})
+            requests = [
+                ("POST", "/api/tasks", TASK, "task.submit", "preparing", 202),
+                ("GET", f"/api/tasks/{TASK_ID}", {"task_id": TASK_ID}, "task.status", "running", 200),
+                ("POST", "/api/tasks/stop", {"task_id": TASK_ID}, "task.stop", "stopping", 200),
+            ]
+            for method, path, params, name, state, code in requests:
+                responses = []
+                body = {"json": params} if method == "POST" else {}
+                def request_task(responses=responses, method=method, path=path, body=body):
+                    responses.append(c.request(method, path, headers=ADMIN, **body))
+
+                thread = threading.Thread(target=request_task)
+                thread.start()
+                command = ws.receive_json()
+                assert (command["name"], command["params"]) == (name, params)
+                data = {"task_id": TASK_ID, "state": state}
+                ws.send_json({"type": "result", "id": command["id"], "ok": True, "data": data})
+                thread.join(timeout=3)
+                assert not thread.is_alive()
+                assert responses[0].status_code == code
+                assert responses[0].json()["data"] == data
+        with c.websocket_connect("/ws/device", headers=DEVICE) as ws:
+            ws.send_json({"type": "hello", "app": "old"})
+            assert c.get(f"/api/tasks/{TASK_ID}", headers=ADMIN).status_code == 409
 
 
 def test_config_round_trip_and_snapshot():

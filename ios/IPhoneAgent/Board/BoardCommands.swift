@@ -66,6 +66,9 @@ extension BoardTransport {
     private var pending: [Int: CheckedContinuation<BoardReply, Error>] = [:]
     private var last = 0.0, beat = 0.0
     var onTiming: ((String, Double) -> Void)?  // command name, ms
+    /// Rechecked under the write lock, including between the segments of a gesture.
+    var authorizeInput: (() throws -> Void)?
+    private static let inputCommands: Set<String> = ["home", "move", "press", "click", "scroll", "type", "key", "homescreen"]
 
     init(transport: BoardTransport? = nil) { self.transport = transport }
 
@@ -145,6 +148,7 @@ extension BoardTransport {
         guard self.transport === transport, transport.isConnected, links == link else {
             throw DeviceError(message: "board link changed before sending the command")
         }
+        if Self.inputCommands.contains(name) { try authorizeInput?() }
         let started = now()
         let id = nextID
         nextID += 1

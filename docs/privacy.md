@@ -11,6 +11,8 @@ ESP32 USB board. The developer runs no servers for it and receives no data from 
   text to the model endpoint **you** set up (a cloud API or your own server). That provider's privacy policy
   applies to those requests. If you enable optional remote management, the configured service receives
   connection status and task progress, and authorized operators can request current screenshots and logs.
+  The separate local task debugging switch lets an authenticated computer submit task text and receive
+  task outcomes, which may contain text read from the screen. Use only test pages in this mode.
 - **On your iPhone only.** Runs (steps, model replies, screenshots, screen video), the debug log and crash
   reports from iOS are stored in the app's own storage. The Wi-Fi video reader can cache up to 64 MiB of
   H.264 reference pictures locally to recover after relaunch; deleting a run does not erase that cache.

@@ -13,6 +13,17 @@ import XCTest
         XCTAssertNil(OpsController.socketURL("https://user:pass@ops.example.com"))
     }
 
+    func testTaskRequestRejectsMalformedIDsAndExtraFields() throws {
+        let id = String(repeating: "a", count: 32)
+        let request = try OpsTaskRequest(["task_id": id, "task": "  打开日历  "], submit: true)
+        XCTAssertEqual(request.id, id)
+        XCTAssertEqual(request.text, "打开日历")
+        XCTAssertNil(try OpsTaskRequest(["task_id": id], submit: false).text)
+        XCTAssertThrowsError(try OpsTaskRequest(["task_id": "bad", "task": "test"], submit: true))
+        XCTAssertThrowsError(try OpsTaskRequest(["task_id": id, "task": " "], submit: true))
+        XCTAssertThrowsError(try OpsTaskRequest(["task_id": id, "task": "a", "click": true], submit: true))
+    }
+
     func testConfigValidationRejectsSecretsAndBadValues() {
         XCTAssertThrowsError(try OpsConfig.validated(["apiKey": "secret"]))
         XCTAssertThrowsError(try OpsConfig.validated(["extraBody": "[]"]))

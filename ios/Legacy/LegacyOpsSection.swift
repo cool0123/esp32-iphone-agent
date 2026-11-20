@@ -9,9 +9,10 @@ struct LegacyOpsSection: View {
             SecureField("设备令牌", text: $ops.token)
                 .autocapitalization(.none).disableAutocorrection(true)
             Toggle("启用远程运维", isOn: $ops.enabled)
+            Toggle("允许电脑下发调试任务（本次运行）", isOn: $ops.acceptsTasks).disabled(!ops.enabled)
             Button("重新连接运维服务") { ops.start() }.disabled(!ops.enabled)
             Text(ops.state)
-            Text("可查看状态、日志和新鲜截图，修改模型配置、测试模型连接及停止任务。")
+            Text("开启屏幕镜像后离开本 App，即可从电脑下发任务。画面失效或收到停止指令后会中止。")
                 .font(.footnote)
         }
     }

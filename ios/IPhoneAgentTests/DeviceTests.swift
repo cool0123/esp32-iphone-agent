@@ -69,6 +69,22 @@ import XCTest
         XCTAssertEqual(board.lines.count, 2)
     }
 
+    func testInputAuthorizationBlocksWriteButAllowsRelease() async throws {
+        let board = FakeBoard()
+        let channel = CommandChannel(transport: board)
+        board.channel = channel
+        channel.authorizeInput = { throw BlindError(reason: "frame not live") }
+        do {
+            try await channel.send("click")
+            XCTFail("expected stale input to be rejected before BLE write")
+        } catch let error as BlindError {
+            XCTAssertEqual(error.reason, "frame not live")
+        }
+        XCTAssertTrue(board.lines.isEmpty)
+        try await channel.send("release")
+        XCTAssertEqual(board.lines.count, 1)
+    }
+
     func testCancelledQueuedClickIsNotWritten() async throws {
         let board = FakeBoard()
         board.silent = true

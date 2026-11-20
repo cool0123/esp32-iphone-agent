@@ -11,7 +11,7 @@ enum Mood: String, Codable, Hashable {
     var body: some Scene { WindowGroup { LegacyView(model: model, board: model.board, settings: model.settings, agent: model.agent) } }
 }
 
-@MainActor final class LegacyModel: ObservableObject, OpsApp {
+@MainActor final class LegacyModel: ObservableObject, OpsTaskApp {
     let board = BoardLink()
     let settings = Settings()
     let feed = VideoFeed()
@@ -24,6 +24,22 @@ enum Mood: String, Codable, Hashable {
     @Published var boardMessage = ""
     @Published var message = "先连接开发板，再开启屏幕镜像。"
     @Published var task = ""
+    private struct RemoteRun {
+        let id: String
+        let text: String
+        let link: Int
+        let stream: Int
+        let deadline: Double
+        var state = "preparing"
+        var steps = 0
+        var result = ""
+    }
+    private var remoteRun: RemoteRun?
+    private var seenRemoteIDs = Set<String>()
+    private var preparing: Task<Void, Never>?
+    private var remoteWatchdog: Task<Void, Never>?
+    private var remoteStopping = false
+    private var startingLocally = false
     init() {
         if settings.baseURL.isEmpty { settings.baseURL = "https://api.deepseek.com" }
         if settings.model.isEmpty, URL(string: settings.baseURL)?.host == "api.deepseek.com" {
@@ -36,7 +52,14 @@ enum Mood: String, Codable, Hashable {
         disableDeepSeekThinking()
         feed.device = board.commands
         board.onVideo = { [weak self] in self?.feed.receive($0) }
-        board.onStatus = { [weak self] in self?.feed.mirroring = $0.ap == "streaming"; if let up = $0.up { self?.feed.boardClock(ms: up) } }
+        board.onStatus = { [weak self] status in
+            guard let self else { return }
+            self.feed.mirroring = status.ap == "streaming"
+            if let up = status.up { self.feed.boardClock(ms: up) }
+            if !self.feed.mirroring || status.usb != "ok" {
+                self.cancelOpsTask(reason: "screen mirroring or USB input stopped")
+            }
+        }
         board.onLinkPreparing = { [weak self] in self?.feed.resetStream() }
         board.onLinkUp = { [weak self] in
             guard let self else { return }
@@ -47,10 +70,13 @@ enum Mood: String, Codable, Hashable {
                 }
             }
         }
-        board.onLinkDown = { [weak self] in self?.feed.linkLost() }
+        board.onLinkDown = { [weak self] in
+            self?.feed.linkLost()
+            self?.cancelOpsTask(reason: "board connection lost")
+        }
         board.log = { [weak self] text in self?.boardMessage = text; DebugLog.write(text) }
         board.commands.log = { DebugLog.write($0) }
-        // The release app only accepts owner setup and task starts from its own UI.
+        // The BLE debug relay is not a release task transport.
         #if DEBUG
         board.commands.onAppCommand = { [weak self] in self?.handleAppCommand($0) }
         #endif
@@ -58,12 +84,21 @@ enum Mood: String, Codable, Hashable {
             guard let last = self?.agent.steps.last else { return }
             self?.say(PyJSON.dumps(last, ascii: false))
         }
-        agent.onFinish = { [weak self] in self?.say("任务已结束；请查看最后一步。") }
-        agent.gate = {
-            while UIApplication.shared.applicationState == .active {
+        agent.onFinish = { [weak self] in self?.finished() }
+        board.commands.authorizeInput = { [weak self] in
+            guard let self, let run = self.remoteRun else { return }
+            if run.state == "stopping" { throw CancellationError() }
+            if run.state == "running" { try self.checkRemoteInput(run) }
+        }
+        agent.gate = { [weak self] in
+            while UIApplication.shared.applicationState != .background {
                 try Task.checkCancellation()
+                if let self, self.remoteRun?.state == "running" {
+                    throw BlindError(reason: "Agent app is in the foreground; remote task stopped")
+                }
                 try await Task.sleep(nanoseconds: 200_000_000)
             }
+            if let self, let run = self.remoteRun, run.state == "running" { try self.checkRemoteInput(run) }
         }
         if ops.enabled { ops.start() }
     }
@@ -77,6 +112,10 @@ enum Mood: String, Codable, Hashable {
         try await feed.stream(on)
     }
     func stopAgent() async {
+        if let state = remoteRun?.state, ["preparing", "running", "stopping"].contains(state) {
+            cancelOpsTask(reason: "stopped by operator")
+            return
+        }
         agent.stop()
         try? await Task.sleep(nanoseconds: 100_000_000)
         if board.connected {
@@ -125,7 +164,140 @@ enum Mood: String, Codable, Hashable {
         if let data = try? JSONSerialization.data(withJSONObject: extra, options: [.sortedKeys]),
            let text = String(data: data, encoding: .utf8) { settings.extraBody = text }
     }
+    private var remoteBoardReady: Bool {
+        UIApplication.shared.isProtectedDataAvailable && board.connected && board.status?.usb == "ok" && feed.live
+    }
+
+    private func checkRemoteInput(_ run: RemoteRun) throws {
+        guard UIApplication.shared.applicationState == .background, ops.enabled, ops.acceptsTasks,
+              ProcessInfo.processInfo.systemUptime < run.deadline, remoteBoardReady,
+              board.commands.links == run.link, feed.streamID == run.stream else {
+            throw BlindError(reason: "remote task lost its live board, permission, or exceeded its deadline")
+        }
+    }
+
+    private func remoteStatus(_ run: RemoteRun) -> [String: Any] {
+        ["task_id": run.id, "state": run.state, "steps": run.state == "running" ? agent.steps.count : run.steps,
+         "result": run.result]
+    }
+
+    func submitOpsTask(id: String, text: String) throws -> [String: Any] {
+        if let run = remoteRun, id == run.id {
+            guard text == run.text else { throw DeviceError(message: "task ID already used with different text") }
+            return remoteStatus(run)
+        }
+        guard !seenRemoteIDs.contains(id), seenRemoteIDs.count < 256 else {
+            throw DeviceError(message: "task ID already used or session task limit reached")
+        }
+        guard !agent.running, preparing == nil, !remoteStopping, !startingLocally else {
+            throw DeviceError(message: "agent already busy")
+        }
+        guard UIApplication.shared.applicationState == .background else {
+            throw DeviceError(message: "leave the Agent app in the background before submitting a remote task")
+        }
+        guard remoteBoardReady, pointer.calibrated else {
+            throw DeviceError(message: "unlock the phone and check calibration, board and live mirroring")
+        }
+        let run = RemoteRun(id: id, text: text, link: board.commands.links, stream: feed.streamID,
+                            deadline: ProcessInfo.processInfo.systemUptime + 180)
+        try checkRemoteInput(run)
+        seenRemoteIDs.insert(id)
+        remoteRun = run
+        remoteWatchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
+                guard let self, let current = self.remoteRun, current.id == id,
+                      current.state == "preparing" || current.state == "running" else { return }
+                do { try self.checkRemoteInput(current) }
+                catch {
+                    self.cancelOpsTask(reason: error.localizedDescription)
+                    return
+                }
+            }
+        }
+        preparing = Task { [weak self] in
+            guard let self else { return }
+            defer { self.preparing = nil }
+            do {
+                let actor = try await settings.client("actor")
+                let planner = try await settings.client("planner")
+                try Task.checkCancellation()
+                guard remoteRun?.id == id, remoteRun?.state == "preparing", !agent.running else {
+                    throw DeviceError(message: "task changed during preparation")
+                }
+                try checkRemoteInput(run)
+                agent.actor = actor
+                agent.planner = planner
+                pointer.forgetPosition()
+                try agent.start(text)
+                remoteRun?.state = "running"
+            } catch {
+                if remoteRun?.state == "preparing" {
+                    remoteRun?.state = "failed"
+                    remoteRun?.result = String(error.localizedDescription.prefix(300))
+                }
+                remoteWatchdog?.cancel()
+            }
+        }
+        return remoteStatus(run)
+    }
+
+    func opsTaskStatus(id: String) throws -> [String: Any] {
+        guard let run = remoteRun, run.id == id else { throw DeviceError(message: "task not found") }
+        return remoteStatus(run)
+    }
+
+    func stopOpsTask(id: String) async throws -> [String: Any] {
+        _ = try opsTaskStatus(id: id)
+        cancelOpsTask(reason: "stopped by operator")
+        return try opsTaskStatus(id: id)
+    }
+
+    func cancelOpsTaskOnDisconnect() { cancelOpsTask(reason: "remote task permission or operations connection lost") }
+
+    private func cancelOpsTask(reason: String) {
+        guard let run = remoteRun, run.state == "preparing" || run.state == "running" else { return }
+        remoteWatchdog?.cancel()
+        preparing?.cancel()
+        if run.state == "running" { agent.stop() }
+        remoteRun?.steps = run.state == "running" ? agent.steps.count : 0
+        remoteRun?.state = run.state == "running" ? "stopping" : "stopped"
+        remoteRun?.result = reason
+    }
+
+    private func finished() {
+        guard let run = remoteRun, run.state == "running" || run.state == "stopping" else {
+            say("任务已结束；请查看最后一步。")
+            return
+        }
+        say("远程任务已结束；请在电脑查看状态。")
+        remoteWatchdog?.cancel()
+        remoteRun?.steps = agent.steps.count
+        if run.state == "stopping" {
+            remoteStopping = true
+            Task { [weak self] in
+                guard let self else { return }
+                defer { self.remoteStopping = false }
+                if board.connected, board.commands.links == run.link {
+                    do { try await board.commands.send("release"); pointer.forgetPosition() }
+                    catch { remoteRun?.result += "; HID release not confirmed" }
+                } else { remoteRun?.result += "; original board link unavailable" }
+                remoteRun?.state = "stopped"
+            }
+            return
+        }
+        let last = agent.steps.last
+        let action = last?["action"]?.str
+        let answer = last?["answer"]?.str?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasAnswer = !(answer ?? "").isEmpty
+        remoteRun?.state = action == "done" && hasAnswer ? "completed" : action == "stopped" ? "stopped" : "failed"
+        remoteRun?.result = String((hasAnswer ? answer ?? "" : last?["reason"]?.str ?? "no verified result").prefix(800))
+    }
+
     func start() async {
+        guard !startingLocally, preparing == nil, !remoteStopping, !agent.running else { return }
+        startingLocally = true
+        defer { startingLocally = false }
         do {
             disableDeepSeekThinking()
             guard pointer.calibrated else { throw DeviceError(message: "先载入本机校准") }
