@@ -25,8 +25,10 @@ enum Mood: String, Codable, Hashable {
     @Published var message = "先连接开发板，再开启屏幕镜像。"
     @Published var task = ""
     init() {
-        settings.baseURL = "https://api.deepseek.com"
-        settings.model = "deepseek-flash"
+        if settings.baseURL.isEmpty { settings.baseURL = "https://api.deepseek.com" }
+        if settings.model.isEmpty, URL(string: settings.baseURL)?.host == "api.deepseek.com" {
+            settings.model = "deepseek-flash"
+        }
         let file = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
         pointer = Pointer(device: board.commands, calibrationFile: file.appendingPathComponent("calibration.json"), screen: feed)
@@ -48,7 +50,10 @@ enum Mood: String, Codable, Hashable {
         board.onLinkDown = { [weak self] in self?.feed.linkLost() }
         board.log = { [weak self] text in self?.boardMessage = text; DebugLog.write(text) }
         board.commands.log = { DebugLog.write($0) }
+        // The release app only accepts owner setup and task starts from its own UI.
+        #if DEBUG
         board.commands.onAppCommand = { [weak self] in self?.handleAppCommand($0) }
+        #endif
         agent.onStep = { [weak self] in
             guard let last = self?.agent.steps.last else { return }
             self?.say(PyJSON.dumps(last, ascii: false))
@@ -74,10 +79,14 @@ enum Mood: String, Codable, Hashable {
     func stopAgent() async {
         agent.stop()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        if board.connected { try? await pointer.reset() }
+        if board.connected {
+            do { try await board.commands.send("release"); pointer.forgetPosition() }
+            catch { say("任务已停止，但未确认按键已释放：\(error.localizedDescription)"); return }
+        }
         say("任务已停止。")
     }
-    // Same trusted BLE debug relay as the full app. No API-key setter or arbitrary HID endpoint.
+    #if DEBUG
+    // Local development only; never accept remote provisioning in a release build.
     private func handleAppCommand(_ line: String) {
         let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
         let name = parts.first ?? "", rest = parts.count > 1 ? parts[1] : ""
@@ -98,6 +107,7 @@ enum Mood: String, Codable, Hashable {
         default: break
         }
     }
+    #endif
     func calibrate() {
         // This handset was measured with axis-separated moves, 0.79 CSS px/HID unit.
         // No guessed calibration is applied to another model.

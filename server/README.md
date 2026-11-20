@@ -10,4 +10,5 @@ run in CI; it gets fixes, not new features. Its prompts are the older ones in `h
 with `prompts/`.
 
 Note: the current firmware speaks BLE, not the TCP protocol this server expects. To run the legacy setup, check out
-`legacy` (or `v0.1.0`) and follow its README.
+`legacy` (or `v0.1.0`) and follow its README. This branch binds unauthenticated legacy Web and board TCP
+ports to loopback for local development. Do not expose those ports through a proxy or container port mapping.

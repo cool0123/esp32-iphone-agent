@@ -53,12 +53,13 @@ enum StepText {
         case "skipped": return "forward"
         case "note": return "text.bubble"
         case "reconnected": return "arrow.triangle.2.circlepath"
+        case "look again": return "eye"
         default: return "exclamationmark.triangle"
         }
     }
 
     static let notMoves: Set<String> = ["plan", "replan (stuck)", "hiccup", "stopped", "error", "fail", "done", "help",
-                                        "takeover", "skipped", "note", "reconnected"]
+                                        "takeover", "skipped", "note", "reconnected", "look again"]
 }
 
 /// How a run ended.

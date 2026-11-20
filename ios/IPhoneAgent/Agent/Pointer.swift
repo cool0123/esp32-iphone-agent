@@ -13,7 +13,7 @@ import Foundation
     static let tapGap = 0.15                // s to stay still after a click, so iOS sees a finished tap
     static let nudge = 12                   // mouse units the pointer is wiggled by to find it on screen
     static let aimTolerance = 0.008         // screen fraction; a bigger miss is corrected before pressing
-    static let maxMiss = 0.06               // bigger misses are still corrected, but not learned from
+    static let maxMiss = 0.06               // larger misses are too uncertain to authorize a click
 
     struct Span: Codable, Equatable { var w: Int, h: Int }
     private struct Saved: Codable { var w: Int, h: Int, seen: [String: [[Double]]]?, quality: Double?, aspect: Double? }
@@ -164,19 +164,19 @@ import Foundation
     /// Closed loop: find the real pointer on screen, fix a miss, and learn the error for later moves.
     private func aim(_ x: Double, _ y: Double) async throws {
         guard let span, let found = try await measure(x, y, model: false) else {
-            log(String(format: "aim (%.3f, %.3f): pointer not found", x, y))
-            return
+            throw DeviceError(message: "precise tap cancelled: pointer not found")
         }
         let fx = Double(found.x), fy = Double(found.y)
-        if max(abs(fx - x), abs(fy - y)) <= Self.maxMiss {  // learn from normal drift only, never a stray reading
-            remember("x", (fix(x, "x"), fx))
-            remember("y", (fix(y, "y"), fy))
-            save()
+        guard max(abs(fx - x), abs(fy - y)) <= Self.maxMiss else {
+            throw DeviceError(message: "precise tap cancelled: pointer position is inconsistent")
         }
+        remember("x", (fix(x, "x"), fx))
+        remember("y", (fix(y, "y"), fy))
+        save()
         if abs(fx - x) <= Self.aimTolerance && abs(fy - y) <= Self.aimTolerance { return }
         let mx = Int(((x - fx) * Double(span.w)).rounded(.toNearestOrEven)), my = Int(((y - fy) * Double(span.h)).rounded(.toNearestOrEven))
-        try await device.send("move \(mx) \(my)")  // fix this miss right away
-        if let p = pos { pos = (p.0 + mx, p.1 + my) }
+        guard let p = pos else { throw DeviceError(message: "precise tap cancelled: pointer position unknown") }
+        try await moveTo(p.0 + mx, p.1 + my, rehome: false)
     }
 
     /// Wiggle the pointer and find it on screen, near the target first, then anywhere. model: ask the vision
@@ -267,7 +267,13 @@ import Foundation
 
     /// aim: find the pointer on screen first (slower); worth it when a tap just missed.
     func tap(_ x: Double, _ y: Double, aim: Bool = false) async throws {
+        let link = device.links
+        let stream = (screen as? VideoFeed)?.streamID
         try await point(x, y, aim: aim)
+        try Task.checkCancellation()
+        guard link == device.links, stream == (screen as? VideoFeed)?.streamID, screen?.live != false else {
+            throw BlindError(reason: "screen or board changed before click")
+        }
         try await device.send("click")
         try await Task.sleep(nanoseconds: UInt64(Self.tapGap * 1e9))
     }
@@ -279,18 +285,32 @@ import Foundation
     /// Press at the first point, move through the rest, release: one continuous stroke. hold rests at the end
     /// first, so lists and pickers stop exactly there; system gestures (home, back) need the flick.
     func drag(_ points: [CGPoint], hold: Bool = true) async throws {
+        let link = device.links
+        let stream = (screen as? VideoFeed)?.streamID
         try await point(Double(points[0].x), Double(points[0].y))
-        try await device.send("press")
+        try Task.checkCancellation()
+        guard link == device.links, stream == (screen as? VideoFeed)?.streamID, screen?.live != false else {
+            throw BlindError(reason: "screen or board changed before drag")
+        }
+        let gestureLink = link
         do {
+            try await device.send("press")
             for p in points.dropFirst() {
+                guard device.links == gestureLink, stream == (screen as? VideoFeed)?.streamID, screen?.live != false else {
+                    throw BlindError(reason: "screen or board changed during drag")
+                }
                 try await moveTo(dx(Double(p.x)), dy(Double(p.y)), rehome: false)  // never home mid-drag
             }
             if hold { try await Task.sleep(nanoseconds: UInt64(Self.hold * 1e9)) }
+            guard device.links == gestureLink else { throw DeviceError(message: "board link changed during drag") }
+            try await device.send("release")
         } catch {
-            _ = try? await device.send("release")
+            let board = device
+            await Task { @MainActor in
+                if board.links == gestureLink, board.connected { _ = try? await board.send("release") }
+            }.value
             throw error
         }
-        try await device.send("release")
     }
 
     func scroll(_ x: Double, _ y: Double, lines: Int) async throws {
@@ -305,20 +325,16 @@ import Foundation
         try await device.send("type \(text)")
     }
     func key(_ combo: String) async throws { try await device.send("key \(combo)") }
-    /// The board's consumer-control Home key ("AC Home"), which iOS treats like a keyboard's home key. Boards
-    /// without it (older firmware) answer an error: then Cmd+H and the flick up from the home bar (a flick, not
-    /// a rest: resting opens the app switcher).
+    /// Ask for the system Home action once. The next screenshot, not the command acknowledgment,
+    /// must confirm navigation. The iOS 15 device instead uses separately observed AssistiveTouch taps.
     func goHome() async throws {
         #if LEGACY_IOS
         // AC Home and Cmd+H both returned success without changing this iOS 15 device. Never pretend
         // otherwise: the actor uses two separately observed AssistiveTouch taps instead.
         throw DeviceError(message: "home unavailable; use AssistiveTouch then 主屏幕")
         #else
-        if (try? await device.send("homescreen")) != nil { return }
-        try await key("cmd+h")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        try await swipe(0.5, 0.995, 0.5, 0.45, hold: false)
-        pos = nil  // starting at the screen's edge may have clamped the pointer: re-home before the next move
+        try await device.send("homescreen")
+        pos = nil
         #endif
     }
     func goBack() async throws {

@@ -78,7 +78,7 @@ import XCTest
     }
 
     func testParseRejectsBadCommands() {
-        for line in ["fly 1 2", "tap 500", "path 1 2 3"] {
+        for line in ["fly 1 2", "tap 500", "path 1 2 3", "tap 1e100 10", "tap NaN 10", "swipe -1 50 300 400"] {
             XCTAssertThrowsError(try Actions.parseCommand(line), line)
         }
     }
@@ -246,6 +246,27 @@ import XCTest
         XCTAssertTrue(finished)
         XCTAssertEqual(agent.steps.last?["answer"], .str("fresh screen"))
         XCTAssertTrue(phone.calls.isEmpty)
+    }
+
+    func testChangedViewDiscardsDecisionEvenWhileStreamStaysLive() async throws {
+        let screen = FakeScreen(), phone = FakeGestures()
+        let model = FakeModel { _ in
+            screen.frame = Data([0xff, 0xd8, 2]); screen.capturedAt = now()
+            return "THINK: tap old page\nDO: tap 100 200"
+        }
+        let agent = AgentLoop(phone: phone, screen: screen, actor: model, planner: model, trace: nil)
+        let finished = try await agent.step()
+        XCTAssertFalse(finished)
+        XCTAssertTrue(phone.calls.isEmpty)
+        XCTAssertEqual(agent.steps.last?["action"], .str("look again"))
+    }
+
+    func testOnlyOneActionIsDispatchedFromAnObservation() async throws {
+        let screen = FakeScreen(), phone = FakeGestures()
+        let model = FakeModel { _ in "THINK: tap then type\nDO: tap 100 200\nDO: type text" }
+        let agent = AgentLoop(phone: phone, screen: screen, actor: model, planner: model, trace: nil)
+        _ = try await agent.step()
+        XCTAssertEqual(phone.calls, ["tap"])
     }
 
     func testUnrecoveredStreamNeverExecutesAnActorGesture() async {

@@ -48,6 +48,8 @@ static bool statusDirty;
 static std::atomic<int> ctrlPending;  // replies queued or sending + a status waiting; video yields to them
 static volatile int peers[MAX_PEERS] = {-1, -1};
 static volatile bool subscribed[MAX_PEERS][CH_COUNT];
+// Change on the NimBLE host task; the TX/video tasks must not send private data before bonding.
+static std::atomic<bool> trusted[MAX_PEERS];
 static std::atomic<bool> linkDropped;
 static std::atomic<uint32_t> videoEpoch;  // new subscriber needs SPS/PPS + IDR before dependent frames
 static uint32_t winStart, winBytes;  // touched by the video task only
@@ -73,6 +75,7 @@ static int slotFor(int h) {
   int i = slotOf(h);
   if (i < 0 && (i = slotOf(-1)) >= 0) {
     for (int c = 0; c < CH_COUNT; c++) subscribed[i][c] = false;
+    trusted[i] = false;
     peers[i] = h;
   }
   return i;
@@ -92,7 +95,7 @@ static int indexOf(NimBLECharacteristic *c) {
 
 static bool anySubscribed(int ch) {
   for (int i = 0; i < MAX_PEERS; i++)
-    if (peers[i] >= 0 && subscribed[i][ch]) return true;
+    if (peers[i] >= 0 && subscribed[i][ch] && (ch == CH_STATUS || trusted[i])) return true;
   return false;
 }
 
@@ -112,6 +115,7 @@ static void tuneLink(uint16_t h) {
 class ServerCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *s, NimBLEConnInfo &ci) override {
     if (slotFor(ci.getConnHandle()) < 0) { s->disconnect(ci.getConnHandle()); return; }
+    updateTrust(ci);
     logConn("connect", ci);
     // DEFAULT is not a connection handle. The controller may apply its own default on connect.
     NimBLEDevice::setPower(0);
@@ -124,6 +128,7 @@ class ServerCb : public NimBLEServerCallbacks {
     int i = slotOf(ci.getConnHandle());
     if (i >= 0) {
       for (int c = 0; c < CH_COUNT; c++) subscribed[i][c] = false;
+      trusted[i] = false;
       peers[i] = -1;
     }
     linkDropped = true;
@@ -135,11 +140,22 @@ class ServerCb : public NimBLEServerCallbacks {
   void onPhyUpdate(NimBLEConnInfo &ci, uint8_t tx, uint8_t rx) override {
     BLE_LOG("conn %u: phy tx %uM rx %uM\n", ci.getConnHandle(), tx, rx);
   }
-  void onAuthenticationComplete(NimBLEConnInfo &ci) override { logConn("security", ci); }
+  void onAuthenticationComplete(NimBLEConnInfo &ci) override {
+    updateTrust(ci);
+    logConn("security", ci);
+  }
+ private:
+  static void updateTrust(NimBLEConnInfo &ci) {
+    int i = slotFor(ci.getConnHandle());
+    if (i < 0) return;
+    bool allowed = ci.isEncrypted() && ci.isBonded();
+    if (trusted[i].exchange(allowed) != allowed && subscribed[i][CH_VIDEO]) videoEpoch++;
+  }
 };
 
 class CharCb : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &ci) override {
+    if (!ci.isEncrypted() || !ci.isBonded()) return;
     const NimBLEAttValue &raw = c->getValue();
     String v(raw.c_str(), raw.length());
     if (c == netChar) { net_request(v); return; }
@@ -199,7 +215,7 @@ static bool notifyOne(int slot, int ch, const uint8_t *p, size_t n, uint32_t sta
   int need = blocksFor(n) + (video ? MBUF_RESERVE : 0);
   for (;;) {
     int h = peers[slot];
-    if (h < 0 || !subscribed[slot][ch]) return false;
+    if (h < 0 || !subscribed[slot][ch] || (ch != CH_STATUS && !trusted[slot])) return false;
     if (!(video && (ctrlPending > 0 || !ctrlRoom(n))) && os_msys_num_free() >= need) {
       os_mbuf *om = ble_hs_mbuf_from_flat(p, n);
       int rc = om ? ble_gatts_notify_custom(h, chars[ch]->getHandle(), om) : BLE_HS_ENOMEM;  // om consumed
@@ -222,7 +238,7 @@ static bool notifyRaw(int ch, const uint8_t *p, size_t n, uint32_t timeout_ms) {
   bool any = false;
   for (int i = 0; i < MAX_PEERS; i++) {
     int h = peers[i];
-    bool listening = h >= 0 && subscribed[i][ch];
+    bool listening = h >= 0 && subscribed[i][ch] && (ch == CH_STATUS || trusted[i]);
     bool sent = notifyOne(i, ch, p, n, millis(), timeout_ms);
     any |= sent;
     // Continuing after a missing video chunk leaves this decoder blind until the next IDR.
@@ -289,7 +305,8 @@ void ble_begin(const String &name) {
   server = NimBLEDevice::createServer();
   server->setCallbacks(new ServerCb());
   NimBLEService *svc = server->createService(UUID("0000"));
-  NimBLECharacteristic *cmd = svc->createCharacteristic(UUID("0001"), NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  NimBLECharacteristic *cmd = svc->createCharacteristic(UUID("0001"), NIMBLE_PROPERTY::WRITE |
+      NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
   chars[CH_REPLY] = svc->createCharacteristic(UUID("0002"), NIMBLE_PROPERTY::NOTIFY);
   chars[CH_STATUS] = svc->createCharacteristic(UUID("0003"), NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ);
   chars[CH_VIDEO] = svc->createCharacteristic(UUID("0004"), NIMBLE_PROPERTY::NOTIFY);

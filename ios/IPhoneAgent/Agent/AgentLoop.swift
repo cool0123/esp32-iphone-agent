@@ -73,7 +73,9 @@ extension Pointer: Gestures {}
 @MainActor final class AgentLoop: ObservableObject {
     struct Planned {
         var act: JObject
-        var shot: Data?  // every action of one reply is drawn on the same screenshot
+        var shot: Data?
+        let link: Int?
+        let stream: Int?
     }
 
     let phone: Gestures?
@@ -186,7 +188,7 @@ extension Pointer: Gestures {}
     }
 
     private func ask(_ role: String, _ llm: ChatModel, _ system: String, _ prompt: String,
-                     temperature: Double = 0, retryTimeout: Bool = true) async throws -> (String, Double, Data?) {
+                     temperature: Double = 0, retryTimeout: Bool = true) async throws -> (String, Double, Data?, Int?, Int?) {
         try await gate?()
         var prompt = prompt
         if let lost = try await waitForScreen() {
@@ -196,6 +198,7 @@ extension Pointer: Gestures {}
         }
         guard let screen, screen.live else { throw BlindError() }  // never let the model act blind
         let frame = screen.frame, started = now()
+        let link = phone?.device.links, stream = (screen as? VideoFeed)?.streamID
         onDoing?(retryTimeout ? .waiting : .retrying)
         let reporting = llm as? ModelProgressReporting
         reporting?.onProgress = { [weak self] progress in
@@ -227,7 +230,7 @@ extension Pointer: Gestures {}
         if let first = reply.firstToken { rec["first_token_s"] = .num((first * 100).rounded() / 100) }
         if lastActed > 0 { rec["frame_after_action_s"] = .num(((screen.capturedAt - lastActed) * 100).rounded() / 100) }
         trace?.write(frame, kind: "llm", rec.merging(reply.diagnostics))
-        return (reply.text, seconds, frame)
+        return (reply.text, seconds, frame, link, stream)
     }
 
     func run() async {
@@ -237,7 +240,9 @@ extension Pointer: Gestures {}
             // the app left, not the app's last frame. A gate that did not hold needs no wait.
             let gateStart = now()
             try await gate?()
-            if now() - gateStart > 0.1 { await screen?.afterAction(since: now()) }
+            if now() - gateStart > 0.1, let screen {
+                guard await screen.fresh(since: now(), timeout: 3) != nil, screen.live else { throw BlindError() }
+            }
             try await replan()
             for _ in 0..<maxSteps {
                 do {
@@ -246,7 +251,7 @@ extension Pointer: Gestures {}
                         continue
                     }
                     failures = 0
-                } catch let e where e is BlindError || e is CancellationError || Task.isCancelled {
+                } catch let e where e is BlindError || e is BoardTimeout || e is CancellationError || Task.isCancelled {
                     throw e
                 } catch {  // a bad reply or a dropped link: recover, don't crash
                     record(nil, ["action": .str("hiccup"), "reason": .str(String(error.localizedDescription.prefix(300)))])
@@ -265,6 +270,8 @@ extension Pointer: Gestures {}
             record(nil, ["action": .str("fail"), "reason": .str("step limit reached")])
         } catch let e where e is CancellationError || Task.isCancelled {
             record(nil, ["action": .str("stopped")])
+        } catch let e as BoardTimeout {
+            record(nil, ["action": .str("fail"), "reason": .str("board acknowledgment missing; check the screen manually: \(e.localizedDescription)")])
         } catch let e as BlindError {
             record(nil, ["action": .str("fail"), "reason": .str(e.reason)])
         } catch {  // e.g. the planner itself is unreachable
@@ -305,57 +312,58 @@ extension Pointer: Gestures {}
         if let metrics { trace?.writeMetrics(metrics.snapshot()) }
     }
 
-    /// One see-think-act round (one or more actions). Returns true when the task is over.
+    /// One see-think-act round. Returns true when the task is over.
     func step() async throws -> Bool {
+        try Task.checkCancellation()
+        guard let screen else { throw BlindError() }
+        let proposals = try await nextActions()
+        guard let planned = proposals.first else { throw BlindError() }
+        let act = planned.act
         var timing = Metrics.Step()
-        let acts = try await nextActions()
-        timing.llmMs = (acts[0].act["think_s"]?.double ?? 0) * 1000
-        let seen = acts[0].shot
-        var spots = [pointerAt]  // where the pointer was and goes: pointer moves are not screen changes
-        let stuck = repeating(acts[0].act)
+        timing.llmMs = (act["think_s"]?.double ?? 0) * 1000
+        let name = act["action"]?.str ?? ""
         defer { metrics?.step(timing) }
-        for (i, planned) in acts.enumerated() {
-            var act = planned.act
-            let name = act["action"]?.str ?? ""
-            if name == "replan" || stuck {
-                record(planned.shot, act)
-                try await replan(stuck: stuck)
-                return false
-            }
-            if let lost = try await waitForScreen() {
-                // The actor answered from a frame that has since fallen behind. Once video recovers,
-                // ask again instead of applying that old decision to a different screen.
-                record(nil, ["action": .str("reconnected"),
-                             "reason": .str(String(format: "screen delayed for %.0f s; decision discarded", lost))])
-                return false
-            }
-            if name != "done" && name != "fail" {
-                try await gate?()
-                onDoing?(.acting(act))  // the thought (on the first act) names the target
-                let started = now()
-                try await perform(act)
-                let finished = now()
-                if name != "wait" { lastActed = finished }
-                let s = finished - started
-                timing.hidMs += s * 1000
-                act["act_s"] = .num((s * 100).rounded() / 100)
-                spots += pointerPath(act)
-                pointerAt = spots.last!
-            }
-            record(planned.shot, act)
-            if name == "done" || name == "fail" { return true }
-            let following = i < acts.count - 1 ? acts[i + 1].act["action"]?.str : nil
-            if name == "tap" && (following == "type" || following == "key") {  // a missed tap never opened the field
-                timing.frameMs += await settle()
-                if !Vision.changed(seen, screen?.frame, ignore: spots) {
-                    steps[steps.count - 1]["changed"] = .bool(false)
-                    return false  // skip the rest; the actor looks again
-                }
-            }
+        if let lost = try await waitForScreen() {
+            record(nil, ["action": .str("reconnected"),
+                         "reason": .str(String(format: "screen delayed for %.0f s; decision discarded", lost))])
+            return false
         }
+        try await gate?()
+        try Task.checkCancellation()
+        let feed = screen as? VideoFeed
+        guard screen.live, planned.link == phone?.device.links, planned.stream == feed?.streamID,
+              let seen = planned.shot, let current = screen.frame,
+              seen == current || !Vision.changed(seen, current, ignore: [pointerAt]) else {
+            record(nil, ["action": .str("look again"), "reason": .str("screen or connection changed; decision discarded")])
+            return false
+        }
+        let stuck = repeating(act)
+        if name == "replan" || stuck {
+            record(planned.shot, act)
+            try await replan(stuck: stuck)
+            return false
+        }
+        if name == "done" || name == "fail" {
+            record(planned.shot, act)
+            return true
+        }
+        // Execute at most one action per observation. Typing and Enter require their own fresh view.
+        var step = act
+        var spots = [pointerAt]
+        onDoing?(.acting(act))
+        let started = now()
+        try await perform(act)
+        let finished = now()
+        if name != "wait" { lastActed = finished }
+        timing.hidMs = (finished - started) * 1000
+        step["act_s"] = .num(((finished - started) * 100).rounded() / 100)
+        spots += pointerPath(act)
+        pointerAt = spots.last ?? pointerAt
+        record(seen, step)
         timing.frameMs += await settle()
-        // feedback for the next round
-        steps[steps.count - 1]["changed"] = .bool(Vision.changed(seen, screen?.frame, ignore: spots))
+        if screen.live, screen.capturedAt > lastActed {
+            steps[steps.count - 1]["changed"] = .bool(Vision.changed(seen, screen.frame, ignore: spots))
+        }
         return false
     }
 
@@ -385,7 +393,7 @@ extension Pointer: Gestures {}
             prompt += "\n\nThe previous plan got stuck (last event: \(pyStr(last["action"])) \(last["reason"]?.str ?? "")):"
                 + "\n\(plan)\nLook at the current screen and plan from here, another way if needed."
         }
-        let (reply, seconds, frame) = try await ask("planner", planner, Prompts.plannerApp + "\n" + AssistiveTouchSpots.rule, prompt)
+        let (reply, seconds, frame, _, _) = try await ask("planner", planner, Prompts.plannerApp + "\n" + AssistiveTouchSpots.rule, prompt)
         let (en, zh) = Actions.parsePlan(reply)
         plan = en
         record(frame, ["action": .str(stuck ? "replan (stuck)" : "plan"), "plan": .str(en), "plan_zh": .str(zh),
@@ -416,7 +424,7 @@ extension Pointer: Gestures {}
         prompt += "Recent actions:\n\(history.isEmpty ? "(none)" : history)\n\nNext action?"
         var reply = ""
         for attempt in 0..<3 {  // retry unparseable replies, a little less deterministically
-            let (text, seconds, frame) = try await ask("actor", actor, actorPrompt, prompt, temperature: 0.4 * Double(attempt))
+            let (text, seconds, frame, link, stream) = try await ask("actor", actor, actorPrompt + "\nReturn exactly one DO line per observation.", prompt, temperature: 0.4 * Double(attempt))
             reply = text
             var acts: [JObject]
             do { acts = try Actions.parseActions(text) } catch { continue }
@@ -426,17 +434,15 @@ extension Pointer: Gestures {}
                 continue
             }
             acts[0]["think_s"] = .num(seconds)
-            return acts.map { Planned(act: $0, shot: frame) }
+            return acts.map { Planned(act: $0, shot: frame, link: link, stream: stream) }
         }
         throw Actions.ParseError(message: "actor gave no valid action: \(reply.prefix(200))")
     }
 
     private func perform(_ a: JObject) async throws {
         guard let phone else { throw DeviceError(message: "no phone") }
+        try Task.checkCancellation()
         if a["action"]?.str != "wait" {
-            // A model reply only proves that some frame existed earlier. Fetch a fresh frame before
-            // every real gesture so a broken/stale stream can never authorize another blind action.
-            if let feed = screen as? VideoFeed { try await feed.currentFrame(maxAge: 1, wait: 2, allowUnchanged: true) }
             guard screen?.live == true else { throw BlindError() }
         }
         func p(_ k: String) -> Double { (a[k]?.double ?? 0) / 1000 }

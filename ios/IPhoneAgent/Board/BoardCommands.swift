@@ -94,7 +94,7 @@ extension BoardTransport {
 
     func waitConnected(_ timeout: TimeInterval) async -> Bool {
         let deadline = now() + timeout
-        while !connected && now() < deadline { try? await Task.sleep(nanoseconds: 200_000_000) }
+        while !Task.isCancelled && !connected && now() < deadline { try? await Task.sleep(nanoseconds: 200_000_000) }
         return connected
     }
 
@@ -104,7 +104,10 @@ extension BoardTransport {
         let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
         let name = parts.first ?? "", arg = parts.count > 1 ? parts[1] : ""
         switch name {
-        case "move": return 5 + Double(arg.split(separator: " ").compactMap { Int($0) }.map(abs).max() ?? 0) / 10 * 0.012
+        case "move":
+            let deltas = arg.split(separator: " ").compactMap { Double($0) }.filter(\.isFinite)
+            let distance = deltas.map { min(abs($0), 100_000) }.max() ?? 0
+            return 5 + distance / 10 * 0.012
         case "type": return 5 + 0.1 * Double(arg.count)
         case "ping": return 8  // an idle check: tolerate a hiccup rather than drop a healthy board
         case "snap": return 15  // a whole GOP over BLE
@@ -113,8 +116,7 @@ extension BoardTransport {
         }
     }
 
-    /// Called once when a command times out (e.g. video starving control traffic): the app turns the
-    /// stream off, then the command is retried once.
+    /// Called once to recover the video transport; never repeat HID just because its acknowledgment was lost.
     var onTimeout: ((String) async -> Void)?
 
     /// Send one command; returns the text after "ok" (e.g. bench's ms). Throws DeviceError on err/timeout.
@@ -123,10 +125,9 @@ extension BoardTransport {
         do {
             return try await send(command, timeout: nil)
         } catch let e as BoardTimeout {
-            guard command != "ping", !command.hasPrefix("stream"), let onTimeout else { throw e }
-            await onTimeout(command)
-            DebugLog.write("cmd retry after timeout: \(command.prefix(40))")
-            return try await send(command, timeout: nil)
+            try Task.checkCancellation()
+            if command != "ping", !command.hasPrefix("stream") { await onTimeout?(command) }
+            throw e
         }
     }
 
@@ -135,10 +136,15 @@ extension BoardTransport {
     @discardableResult
     func send(_ command: String, timeout custom: Double?) async throws -> String {
         guard connected, let transport else { throw DeviceError(message: "board not connected") }
+        let link = links
         let timeout = custom ?? Self.timeout(command)
         let name = String(command.split(separator: " ").first ?? "")
         await lock.lock()
         defer { lock.unlock() }
+        try Task.checkCancellation()
+        guard self.transport === transport, transport.isConnected, links == link else {
+            throw DeviceError(message: "board link changed before sending the command")
+        }
         let started = now()
         let id = nextID
         nextID += 1

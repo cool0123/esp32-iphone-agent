@@ -27,7 +27,14 @@ enum Actions {
             let text = rest.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
             return ["action": .str(name), first: .str(text)]
         }
-        let numbers = matches(#"-?\d+(?:\.\d+)?"#, in: rest).compactMap { Double($0) }.map { Int($0) }
+        let fields = rest.split(whereSeparator: \.isWhitespace)
+        let coords = name == "tap" && fields.last?.lowercased() == "precise" ? fields.dropLast() : fields[...]
+        let numbers = try coords.map { field -> Int in
+            guard let value = Double(field), value.isFinite, (0...1000).contains(value) else {
+                throw ParseError(message: "coordinates must be numbers in 0...1000")
+            }
+            return Int(value)
+        }
         if keys == ["points"] {
             guard numbers.count >= 4, numbers.count % 2 == 0 else {
                 throw ParseError(message: "path needs 2+ x y pairs: \(line.prefix(100))")
@@ -41,7 +48,7 @@ enum Actions {
         }
         var action: JObject = ["action": .str(name)]
         for (k, n) in zip(keys, numbers) { action[k] = .int(n) }
-        if name == "tap" && rest.lowercased().contains("precise") { action["precise"] = .bool(true) }
+        if name == "tap" && fields.last?.lowercased() == "precise" { action["precise"] = .bool(true) }
         return action
     }
 
@@ -94,12 +101,6 @@ enum Actions {
 
     private static func regex(_ p: String, multiline: Bool) -> NSRegularExpression {
         try! NSRegularExpression(pattern: p, options: multiline ? [.anchorsMatchLines, .caseInsensitive] : [])
-    }
-
-    private static func matches(_ p: String, in s: String) -> [String] {
-        let ns = s as NSString
-        return regex(p, multiline: false).matches(in: s, range: NSRange(location: 0, length: ns.length))
-            .map { ns.substring(with: $0.range) }
     }
 
     private static func firstGroup(_ p: String, in s: String, multiline: Bool) -> String? {

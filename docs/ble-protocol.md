@@ -1,8 +1,9 @@
 # BLE protocol (ESP32 ⇄ iOS app)
 
 The board is a BLE peripheral named `ESP32 Agent XXXX` (XXXX = last 2 MAC bytes, hex).
-Security: LE Secure Connections, bonding, Just Works. `net` requires an encrypted link,
-so reading it triggers the iOS pairing prompt.
+BLE transport requires an encrypted bond for commands, replies and video. Read-only status is still public.
+First-time bonding uses Just Works; it is not an owner allowlist or a physical-presence check. Only use the
+prototype on a trusted bench. Production builds do not relay `app` or `log` debug commands.
 
 Service `6e400001-a9e8-4b1b-9c39-6d6f8a3c0000`
 

@@ -30,7 +30,7 @@ const long MOVE_LIMIT = 4096;  // worst case ~3.3 s, safely below the 8 s watchd
 #endif
 
 // Explicit runtime marker: ino timestamps can be cached when only a .cpp changes.
-static const char *firmwareRevision = "wifi-video-window-v2";
+static const char *firmwareRevision = "wifi-video-bonded-v1";
 const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the board instead of staying offline
 static uint32_t usbBootWaitMs;
 static bool usbConfiguredAtBoot;
@@ -149,10 +149,13 @@ String board(const String &line, const String &id) {
     video_stream(arg == "on");
     return "ok";
   }
-  if (cmd == "app" || cmd == "log") {  // debug relay: Mac -> app ("app run ...") and app -> Mac ("log ...")
-    ble_reply(cmd + " " + arg);         // every peer sees it; each side ignores lines it doesn't handle
+  // Debug forwarding is absent from production firmware. Do not expose task or Ops provisioning over BLE.
+#if DEBUG_SERIAL
+  if (cmd == "app" || cmd == "log") {
+    ble_reply(cmd + " " + arg);
     return "ok";
   }
+#endif
   if (cmd == "snap") { video_snap(id); return ""; }  // replies when the GOP is sent
   if (cmd == "power") {
     if (arg.length() && arg != "status") return "err usage: power [status]";

@@ -97,7 +97,9 @@ import UIKit
             let relay = { MainActor.assumeIsolated { if !MockMode.on { self?.board.commands.relayLog(line) } } }
             Thread.isMainThread ? relay() : DispatchQueue.main.async(execute: relay)
         }
+        #if DEBUG
         board.commands.onAppCommand = { [weak self] line in self?.handleAppCommand(line) }
+        #endif
         DebugLog.write("app launched \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") ?? "")"
                        + " (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") ?? ""))")
         settingsSink = settings.$configurationRevision.dropFirst().sink { [weak self] _ in

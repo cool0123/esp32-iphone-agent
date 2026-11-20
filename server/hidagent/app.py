@@ -30,7 +30,7 @@ agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
 
 @asynccontextmanager
 async def lifespan(_):
-    server = await device.serve("0.0.0.0", int(os.environ.get("DEVICE_PORT", 7300)))
+    server = await device.serve("127.0.0.1", int(os.environ.get("DEVICE_PORT", 7300)))
     screen.start()
     awake = asyncio.create_task(device.keep_awake(screen=screen))
     yield

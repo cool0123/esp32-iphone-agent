@@ -69,6 +69,26 @@ import XCTest
         XCTAssertEqual(board.lines.count, 2)
     }
 
+    func testCancelledQueuedClickIsNotWritten() async throws {
+        let board = FakeBoard()
+        board.silent = true
+        let channel = CommandChannel(transport: board)
+        board.channel = channel
+        let first = Task { try await channel.send("ping") }
+        while board.lines.isEmpty { await Task.yield() }
+        let queued = Task { try await channel.send("click") }
+        await Task.yield()
+        queued.cancel()
+        let id = try XCTUnwrap(board.lines.first?.split(separator: " ").first)
+        channel.handleReply("\(id) ok")
+        _ = try await first.value
+        do {
+            _ = try await queued.value
+            XCTFail("cancelled click must throw")
+        } catch is CancellationError { }
+        XCTAssertEqual(board.lines.count, 1)
+    }
+
     func testLinkDownFailsCommandsInFlight() async {
         let board = FakeBoard()
         board.silent = true

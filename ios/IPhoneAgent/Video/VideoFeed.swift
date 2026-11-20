@@ -33,7 +33,7 @@ extension ScreenSource {
     func settled(quiet: Double = 0.5, least: Double = 0.3, most: Double = 4) async {
         let started = now()
         try? await Task.sleep(nanoseconds: UInt64(least * 1e9))
-        while now() - updated < quiet + lag && now() - started < most {
+        while !Task.isCancelled && now() - updated < quiet + lag && now() - started < most {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
@@ -45,7 +45,7 @@ extension ScreenSource {
     func fresh(since: Double, timeout: Double = 0.8) async -> Data? {
         let deadline = now() + timeout
         while (capturedAt > 0 ? capturedAt : updated) <= since {
-            if now() > deadline { return nil }
+            if Task.isCancelled || now() > deadline { return nil }
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
         return frame
@@ -400,7 +400,7 @@ extension ScreenSource {
     private func newer(than t: Double, timeout: Double) async -> Bool {
         let deadline = now() + timeout
         while capturedAt < t {
-            if now() > deadline { return false }
+            if Task.isCancelled || now() > deadline { return false }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         return true

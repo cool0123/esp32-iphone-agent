@@ -107,6 +107,7 @@ extension AppModel: OpsApp {
     private var socket: URLSessionWebSocketTask?
     private var job: Task<Void, Never>?
     private var telemetryJob: Task<Void, Never>?
+    private var modelCheckJob: Task<Void, Never>?
     private let sendLock = AsyncLock()
     private var generation = 0
 
@@ -160,7 +161,8 @@ extension AppModel: OpsApp {
 
     func stop() {
         generation += 1
-        job?.cancel(); telemetryJob?.cancel()
+        job?.cancel(); telemetryJob?.cancel(); modelCheckJob?.cancel()
+        modelCheckJob = nil
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
         state = "Off"
@@ -188,6 +190,22 @@ extension AppModel: OpsApp {
                 @unknown default: data = nil
                 }
                 guard let data, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                if object["type"] as? String == "command", object["name"] as? String == "model.check" {
+                    if modelCheckJob == nil {
+                        modelCheckJob = Task { [weak self] in
+                            guard let self else { return }
+                            await self.handle(object, app: app, socket: socket)
+                            if self.generation == gen { self.modelCheckJob = nil }
+                        }
+                    } else if let id = object["id"] as? String {
+                        try await send(["type": "result", "id": id, "ok": false,
+                                        "error": "model check already running"], on: socket)
+                    }
+                    continue
+                }
+                if object["type"] as? String == "command", object["name"] as? String == "agent.stop" {
+                    modelCheckJob?.cancel()
+                }
                 await handle(object, app: app, socket: socket)
             }
         } catch {
