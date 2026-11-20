@@ -6,9 +6,9 @@ import os
 import sys
 import uuid
 from urllib.error import HTTPError, URLError
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import Request
 
-BASE = "http://127.0.0.1:3233/api/tasks"
+from .ops_local import local_ops
 
 
 def main():
@@ -31,10 +31,11 @@ def main():
     if args.verb == "submit":
         data["task"] = args.text
     path = {"submit": "", "status": "/" + task_id, "stop": "/stop"}[args.verb]
-    request = Request(BASE + path, data=None if args.verb == "status" else json.dumps(data).encode(),
-                      headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
     try:
-        with build_opener(ProxyHandler({})).open(request, timeout=20) as response:
+        base, opener = local_ops()
+        request = Request(base + "/api/tasks" + path, data=None if args.verb == "status" else json.dumps(data).encode(),
+                          headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        with opener.open(request, timeout=20) as response:
             print(json.dumps(json.load(response)["data"], ensure_ascii=False))
     except HTTPError as error:
         try:

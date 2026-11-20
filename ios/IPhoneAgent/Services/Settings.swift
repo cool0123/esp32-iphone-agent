@@ -3,6 +3,27 @@ import NetworkExtension
 import Security
 import UIKit
 
+/// The endpoint and rotated key are saved atomically in one Keychain item. Do not reuse a
+/// rotated key after a provider change, even if an interrupted settings update left the item behind.
+struct StoredModelKey: Codable {
+    private static let marker = "\nmodel-key-v1\n"
+    let endpoint: String
+    let key: String
+
+    func encoded() throws -> String {
+        Self.marker + String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
+    }
+
+    static func resolve(_ stored: String?, endpoint: String, preset: String?) -> String {
+        guard let stored, !stored.isEmpty else { return preset ?? "" }
+        guard stored.hasPrefix(marker) else { return stored }
+        let body = Data(stored.dropFirst(marker.count).utf8)
+        guard let entry = try? JSONDecoder().decode(Self.self, from: body),
+              entry.endpoint == OpsModelKeyRequest.endpoint(endpoint) else { return "" }
+        return entry.key
+    }
+}
+
 /// LLM settings. The API key lives in the Keychain, everything else in UserDefaults.
 @MainActor final class Settings: ObservableObject {
     static let defaultBaseURL = ""  // user enters their own OpenAI-compatible endpoint
@@ -15,7 +36,10 @@ import UIKit
         defaults.set(baseURL, forKey: "baseURL")
         if baseURL != oldValue {
             // Never carry an old provider's credential to a newly typed endpoint.
-            if URL(string: oldValue)?.host != URL(string: baseURL)?.host { apiKey = "" }
+            let fallbackChanged = OpsModelKeyRequest.endpoint(baseURL) == nil && URL(string: oldValue) != URL(string: baseURL)
+            if OpsModelKeyRequest.endpoint(oldValue) != OpsModelKeyRequest.endpoint(baseURL) || fallbackChanged {
+                apiKey = ""
+            }
             modelsChanged()
         }
     } }
@@ -26,8 +50,26 @@ import UIKit
     @Published var actorModel: String { didSet { defaults.set(actorModel, forKey: "actorModel"); configurationRevision += 1 } }        // "" = model
     @Published var tokenParam: String { didSet { defaults.set(tokenParam, forKey: "tokenParam"); configurationRevision += 1 } }        // auto | ...
     @Published var extraBody: String { didSet { defaults.set(extraBody, forKey: "extraBody"); configurationRevision += 1 } }          // JSON object
-    @Published var apiKey: String { didSet { Keychain.set(apiKey, for: "llm-api-key"); DebugLog.redact([apiKey])
-        if apiKey != oldValue { modelsChanged() } } }
+    @Published var apiKey: String { didSet {
+        if !publishingPersistedKey { Keychain.set(apiKey, for: "llm-api-key") }
+        DebugLog.redact([apiKey])
+        if apiKey != oldValue { modelsChanged(keepSelection: publishingPersistedKey) }
+    } }
+    private var publishingPersistedKey = false
+
+    /// Publish only after a successful in-place Keychain write; a failure keeps the previous key.
+    func rotateModelKey(_ key: String) throws {
+        guard let endpoint = OpsModelKeyRequest.endpoint(baseURL) else {
+            throw DeviceError(message: "provider endpoint mismatch")
+        }
+        guard let entry = try? StoredModelKey(endpoint: endpoint, key: key).encoded(),
+              Keychain.replace(entry, for: "llm-api-key") else {
+            throw DeviceError(message: "keychain write failed")
+        }
+        publishingPersistedKey = true
+        defer { publishingPersistedKey = false }
+        apiKey = key
+    }
     /// What the agent is called (Agent tab title, greeting, Live Activity); empty = the default.
     /// The endpoint's model list (GET /models), for the pickers; empty until loaded or when it can't be fetched.
     @Published private(set) var models: [String] = []
@@ -53,14 +95,15 @@ import UIKit
     init(defaults: UserDefaults = .standard, info: [String: Any]? = Bundle.main.infoDictionary) {
         self.defaults = defaults
         let preset = { (key: String) in Self.stored((info?[key] as? String)?.trimmingCharacters(in: .whitespaces)) }
-        baseURL = Self.stored(defaults.string(forKey: "baseURL")) ?? preset("IAPresetBaseURL") ?? Self.defaultBaseURL
+        let initialBaseURL = Self.stored(defaults.string(forKey: "baseURL")) ?? preset("IAPresetBaseURL") ?? Self.defaultBaseURL
+        baseURL = initialBaseURL
         model = Self.stored(defaults.string(forKey: "model")) ?? preset("IAPresetModel") ?? Self.defaultModel
         autoModel = defaults.string(forKey: "autoModel") ?? ""
         plannerModel = defaults.string(forKey: "plannerModel") ?? ""
         actorModel = defaults.string(forKey: "actorModel") ?? ""
         tokenParam = defaults.string(forKey: "tokenParam") ?? "auto"
         extraBody = defaults.string(forKey: "extraBody") ?? "{}"
-        apiKey = Self.stored(Keychain.get("llm-api-key")) ?? preset("IAPresetKey") ?? ""
+        apiKey = StoredModelKey.resolve(Keychain.get("llm-api-key"), endpoint: initialBaseURL, preset: preset("IAPresetKey"))
         agentName = defaults.string(forKey: Self.agentNameKey) ?? Self.defaultAgentName
         onboarded = defaults.bool(forKey: "onboarded")
         acceptedDisclaimer = defaults.bool(forKey: "acceptedDisclaimer")
@@ -90,11 +133,11 @@ import UIKit
         throw LLMError(message: "Choose a vision model or enter its model ID before testing.")
     }
 
-    private func modelsChanged() {
+    private func modelsChanged(keepSelection: Bool = false) {
         configurationRevision += 1
         modelsRequest += 1
         loadingModels = false
-        autoModel = ""
+        if !keepSelection { autoModel = "" }
         models = []
         modelsError = nil
     }
@@ -167,6 +210,18 @@ enum Keychain {
         var out: CFTypeRef?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    static func replace(_ value: String, for account: String) -> Bool {
+        guard !value.isEmpty else { return false }
+        let existing = query(account)
+        let attributes: [CFString: Any] = [kSecValueData: Data(value.utf8), kSecAttrAccessible: kSecAttrAccessibleWhenUnlocked]
+        let status = SecItemUpdate(existing as CFDictionary, attributes as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
+        var entry = existing
+        attributes.forEach { entry[$0.key] = $0.value }
+        return SecItemAdd(entry as CFDictionary, nil) == errSecSuccess
     }
 
     static func set(_ value: String, for account: String) {

@@ -99,7 +99,7 @@ final class StubProtocol: URLProtocol {
             _ = try await client("router").chat(system: "test", text: "test")
             XCTFail("Expected provider error")
         } catch {
-            XCTAssertEqual(error.localizedDescription, "No available provider")
+            XCTAssertEqual(error.localizedDescription, "Provider reported an error in the model response")
             XCTAssertEqual(StubProtocol.seen.count, 1)
         }
     }
@@ -206,6 +206,17 @@ final class StubProtocol: URLProtocol {
         XCTAssertTrue(reply.retried)
         XCTAssertEqual(reply.finishReason, "stop")
         XCTAssertEqual(reply.usage["completion_tokens"], 9)
+    }
+
+    func testHTTPAuthenticationErrorDoesNotExposeProviderResponse() async {
+        let llm = client("qwen")
+        StubProtocol.respond = { _ in (401, "application/json", "{\"error\":\"invalid key: ****test\"}") }
+        do {
+            _ = try await llm.chat(system: "sys", text: "hi", image: nil, maxTokens: 600, temperature: 0)
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "LLM HTTP 401: check the model API key")
+        }
     }
 
     func testHTTPErrorsAreThrown() async {

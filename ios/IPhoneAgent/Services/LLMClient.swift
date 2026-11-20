@@ -35,6 +35,14 @@ struct LLMError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// Keep authenticated requests on their configured endpoint, using normal system TLS validation.
+final class NoHTTPRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 /// Client for any OpenAI-compatible chat endpoint (vision models). Port of llm.py, with streaming:
 /// Cloudflare cuts requests that send nothing for ~100 s, so replies are streamed (SSE). A server that
 /// ignores `stream` and answers with plain JSON works too.
@@ -65,7 +73,7 @@ struct LLMError: LocalizedError {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 30  // no byte for this long = hung; the agent retries
             config.timeoutIntervalForResource = 90
-            return URLSession(configuration: config)
+            return URLSession(configuration: config, delegate: NoHTTPRedirects(), delegateQueue: nil)
         }()
     }
 
@@ -114,14 +122,18 @@ struct LLMError: LocalizedError {
             throw error
         }
         guard (200..<300).contains(status), var result else {
-            DebugLog.write(String(format: "llm ✗ HTTP %d after %.1f s: %@", status, now() - started, String(errorText.prefix(200))))
-            throw LLMError(message: "LLM HTTP \(status): \(errorText.prefix(300))")
+            DebugLog.write(String(format: "llm ✗ HTTP %d after %.1f s", status, now() - started))
+            throw LLMError(message: Self.httpFailure(status))
         }
         result.total = now() - started
         DebugLog.write(String(format: "llm ← HTTP %d, first token %@, total %.1f s, %d chars", status,
                               result.firstToken.map { String(format: "%.1f s", $0) } ?? "-", result.total, result.text.count)
                        + " " + PyJSON.dumps(.obj(result.diagnostics)))
         return result
+    }
+
+    static func httpFailure(_ status: Int) -> String {
+        status == 401 ? "LLM HTTP 401: check the model API key" : "LLM HTTP \(status)"
     }
 
     /// The first model id from GET {base}/models.
@@ -139,10 +151,12 @@ struct LLMError: LocalizedError {
         guard let base = URL(string: trimmed) else { throw LLMError(message: "invalid base URL") }
         var request = URLRequest(url: base.appendingPathComponent("models"), timeoutInterval: 20)
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let session = URLSession(configuration: .ephemeral, delegate: NoHTTPRedirects(), delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
-            throw LLMError(message: "GET /models: HTTP \(status) \(String(decoding: data.prefix(200), as: UTF8.self))")
+            throw LLMError(message: "GET /models: \(httpFailure(status))")
         }
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         let list = (json?["data"] as? [[String: Any]]) ?? (json?["models"] as? [[String: Any]]) ?? []
@@ -210,7 +224,7 @@ struct LLMError: LocalizedError {
         if let json { try Self.checkError(json) }
         let choice = (json?["choices"] as? [[String: Any]])?.first
         guard let json, let msg = choice?["message"] as? [String: Any] else {
-            throw LLMError(message: "bad LLM reply: \(String(decoding: raw.prefix(200), as: UTF8.self))")
+            throw LLMError(message: "bad LLM reply")
         }
         var result = ChatResult(text: msg["content"] as? String ?? "", firstToken: nil, total: 0)
         note(json, choice, into: &result)
@@ -221,9 +235,8 @@ struct LLMError: LocalizedError {
 
     /// Providers can report errors inside an HTTP 200 stream or JSON response.
     private static func checkError(_ json: [String: Any]) throws {
-        guard let error = json["error"] else { return }
-        let message = (error as? [String: Any])?["message"] as? String ?? (error as? String) ?? "Provider error"
-        throw LLMError(message: String(message.prefix(300)))
+        guard json["error"] != nil else { return }
+        throw LLMError(message: "Provider reported an error in the model response")
     }
 
     /// finish_reason and usage, from whichever event carries them.

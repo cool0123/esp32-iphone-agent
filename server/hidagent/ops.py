@@ -4,7 +4,7 @@ Run separately from the legacy computer-side agent:
   OPS_DEVICE_TOKEN=... OPS_ADMIN_TOKEN=... python -m hidagent.ops
 
 The iPhone makes the outbound WebSocket connection. AI/admin clients use the HTTP API.
-No board HID command or model credential is exposed by this service.
+No board HID command or model credential is readable through this service.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import uuid
 from contextlib import asynccontextmanager
 from ipaddress import IPv4Address, IPv4Network
 from typing import Annotated, Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlsplit, urlunparse
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -33,6 +33,29 @@ ALLOWED_CONFIG = {
 
 
 TaskID = Annotated[str, StringConstraints(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")]
+
+
+KEY_PROTOCOL = "model-key-v1"
+MAX_ROTATION_BODY = 8192
+ROTATION_REJECTIONS = {
+    "rotation disabled", "app busy or phone locked", "provider endpoint mismatch", "keychain write failed",
+}
+
+
+def valid_rotation(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {"baseURL", "apiKey"}:
+        return False
+    endpoint, key = value["baseURL"], value["apiKey"]
+    if not isinstance(key, str) or not 8 <= len(key) <= 2048 or not all(33 <= ord(c) <= 126 for c in key):
+        return False
+    if not isinstance(endpoint, str) or not 1 <= len(endpoint) <= 512 or not all(33 <= ord(c) <= 126 for c in endpoint):
+        return False
+    try:
+        u = urlsplit(endpoint)
+        return bool(u.scheme == "https" and u.hostname and u.port != 0 and u.username is None
+                    and u.password is None and "?" not in endpoint and "#" not in endpoint and "\\" not in endpoint)
+    except ValueError:
+        return False
 
 
 class TaskRef(BaseModel):
@@ -100,6 +123,7 @@ class OpsHub:
         self.telemetry: dict[str, Any] = {}
         self.last_seen = 0.0
         self.task_protocol = False
+        self.key_protocol = False
         self.pending: dict[str, asyncio.Future] = {}
         self.send_lock = asyncio.Lock()
 
@@ -113,6 +137,7 @@ class OpsHub:
         self.telemetry = {}
         self.last_seen = 0.0
         self.task_protocol = False
+        self.key_protocol = False
         if old:
             for future in self.pending.values():
                 if not future.done():
@@ -139,6 +164,7 @@ class OpsHub:
         kind = message.get("type")
         if kind == "hello":
             self.task_protocol = message.get("taskProtocol") == "legacy-task-v1"
+            self.key_protocol = ws.url.scheme == "wss" and message.get("keyProtocol") == KEY_PROTOCOL
         if kind in ("hello", "telemetry"):
             self.telemetry = message
         elif kind == "result":
@@ -152,6 +178,8 @@ class OpsHub:
             raise HTTPException(503, "device is offline")
         if name.startswith("task.") and not self.task_protocol:
             raise HTTPException(409, "connected phone does not support remote tasks")
+        if name == "model.key.rotate" and not self.key_protocol:
+            raise HTTPException(409, "connected phone does not support secure key rotation")
         request_id = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
@@ -167,6 +195,16 @@ class OpsHub:
             raise HTTPException(503, str(e)) from e
         finally:
             self.pending.pop(request_id, None)
+        if name == "model.key.rotate":
+            if reply.get("ok") is not True:
+                detail = reply.get("error")
+                if not isinstance(detail, str) or detail not in ROTATION_REJECTIONS:
+                    detail = "key rotation rejected"
+                raise HTTPException(409, detail)
+            data = reply.get("data")
+            if not isinstance(data, dict) or data.get("updated") is not True:
+                raise HTTPException(502, "unconfirmed key rotation; do not retry automatically")
+            return {"updated": True}
         if not reply.get("ok"):
             raise HTTPException(409, str(reply.get("error", "device command failed"))[:300])
         return reply.get("data")
@@ -179,11 +217,16 @@ async def result_data(hub: OpsHub, name: str, params: dict[str, Any] | None = No
 
 def create_app(
     device_token: str | None = None, admin_token: str | None = None, *,
-    tasks_enabled: bool = False, task_device_ip: str | None = None,
+    tasks_enabled: bool = False, task_device_ip: str | None = None, key_rotation_enabled: bool = False,
 ):
+    if key_rotation_enabled and (not tasks_enabled or not task_device_ip):
+        raise ValueError("key rotation requires restricted local task mode")
     device_token = device_token if device_token is not None else os.environ.get("OPS_DEVICE_TOKEN", "")
     admin_token = admin_token if admin_token is not None else os.environ.get("OPS_ADMIN_TOKEN", "")
+    if key_rotation_enabled and (not device_token or not admin_token or device_token == admin_token):
+        raise ValueError("key rotation requires distinct device and administrator tokens")
     hub = OpsHub()
+    rotation_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_):
@@ -208,7 +251,9 @@ def create_app(
     @app.websocket("/ws/device")
     async def device(ws: WebSocket, authorization: str = Header(default="")):
         expected = "Bearer " + device_token
-        if (task_device_ip and (ws.client is None or ws.client.host != task_device_ip)) or (
+        if (key_rotation_enabled and ws.url.scheme != "wss") or (
+            task_device_ip and (ws.client is None or ws.client.host != task_device_ip)
+        ) or (
             not device_token or not secrets.compare_digest(authorization.encode(), expected.encode())
         ):
             await ws.close(code=4401)
@@ -228,7 +273,39 @@ def create_app(
     @app.get("/api/status", dependencies=[Depends(admin)])
     def status():
         return {"connected": hub.connected, "last_seen": hub.last_seen, "telemetry": hub.telemetry,
-                "remote_tasks_supported": hub.connected and hub.task_protocol}
+                "remote_tasks_supported": hub.connected and hub.task_protocol,
+                "model_key_rotation_supported": key_rotation_enabled and hub.connected and hub.key_protocol}
+
+    @app.post("/api/model/key", dependencies=[Depends(admin)])
+    async def rotate_model_key(request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        if not key_rotation_enabled:
+            raise HTTPException(404, "key rotation disabled")
+        if request.url.scheme != "https":
+            raise HTTPException(403, "key rotation requires direct TLS")
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            raise HTTPException(415, "expected JSON")
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_ROTATION_BODY:
+                raise HTTPException(413, "request too large")
+            body.extend(chunk)
+        try:
+            data = json.loads(body)
+            if not valid_rotation(data):
+                raise ValueError()
+        except (ValueError, RecursionError):
+            raise HTTPException(400, "invalid key rotation request") from None
+        if rotation_lock.locked():
+            raise HTTPException(409, "key rotation already in progress")
+        async with rotation_lock:
+            try:
+                result = await hub.command("model.key.rotate", data)
+            except HTTPException as e:
+                if e.status_code < 500:
+                    raise
+                raise HTTPException(e.status_code, "key rotation unconfirmed; do not retry automatically") from None
+        return {"ok": True, "data": result}
 
     @app.get("/api/config", dependencies=[Depends(admin)])
     async def config():
@@ -293,8 +370,14 @@ def main():
     if not device or not admin or device == admin:
         raise SystemExit("set distinct OPS_DEVICE_TOKEN and OPS_ADMIN_TOKEN")
     host, port = os.environ.get("OPS_HOST", "127.0.0.1"), int(os.environ.get("OPS_PORT", "8787"))
-    if os.environ.get("OPS_TASKS_ENABLED") != "1":
-        uvicorn.run(app, host=host, port=port, proxy_headers=False)
+    rotate = os.environ.get("OPS_KEY_ROTATION_ENABLED") == "1"
+    cert, key = os.environ.get("OPS_TLS_CERT"), os.environ.get("OPS_TLS_KEY")
+    tasks = os.environ.get("OPS_TASKS_ENABLED") == "1"
+    if bool(cert) != bool(key) or (rotate and (not tasks or not cert or not key)):
+        raise SystemExit("key rotation requires restricted task mode and a direct TLS certificate/key pair")
+    tls = {"ssl_certfile": cert, "ssl_keyfile": key}
+    if not tasks:
+        uvicorn.run(app, host=host, port=port, proxy_headers=False, **tls)
         return
     try:
         lan = IPv4Address(host)
@@ -305,8 +388,8 @@ def main():
     if not any(lan in net and phone in net for net in private_lans) or lan == phone or port != 3233:
         raise SystemExit("task mode requires distinct private LAN addresses and OPS_PORT=3233")
     server = uvicorn.Server(uvicorn.Config(
-        create_app(device, admin, tasks_enabled=True, task_device_ip=str(phone)),
-        proxy_headers=False, access_log=False, ws_max_size=4_000_000,
+        create_app(device, admin, tasks_enabled=True, task_device_ip=str(phone), key_rotation_enabled=rotate),
+        proxy_headers=False, access_log=False, ws_max_size=4_000_000, **tls,
     ))
     with socket.socket() as local, socket.socket() as lan_socket:
         for sock, address in ((local, "127.0.0.1"), (lan_socket, str(lan))):

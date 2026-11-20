@@ -2,7 +2,7 @@
 
 The iOS app makes an **outbound** WebSocket connection to a small management service. The phone works over
 cellular or Wi-Fi; no inbound phone listener, public ESP32 port, or computer-side agent is required.
-The service relays status, diagnostics, screenshots, whitelisted configuration, a fixed image/model connection check, and agent stop. An opt-in iOS 15 debug mode also accepts named task submissions from the computer. It never exposes arbitrary HID commands, the LLM API key, or the device-management token.
+The service relays status, diagnostics, screenshots, whitelisted configuration, a fixed image/model connection check, and agent stop. An opt-in iOS 15 debug mode also accepts named task submissions from the computer. It never exposes arbitrary HID commands or makes either credential readable. Build 18 adds a separate, opt-in model-key write operation.
 
 ## 1. Start the management service
 
@@ -93,6 +93,20 @@ asynchronous; poll until terminal. No task queue, automatic retry or resume is p
 the latest result and duplicate IDs in memory only; if submission is uncertain, query the returned ID
 before deciding how to proceed, particularly after app relaunch. Start with disposable test pages and no
 file deletion. Do not run the desktop BLE controller and a phone task at the same time.
+
+### iOS 15 model API key rotation (build 18+)
+
+1. Use the restricted task service above with `OPS_KEY_ROTATION_ENABLED=1`, `OPS_TLS_CERT` (PEM server certificate chain) and `OPS_TLS_KEY` (private PEM key readable only by the service account). TLS is served directly on both listeners, not terminated by a reverse proxy. Keep the server certificate’s private key on the computer. The certificate must cover `127.0.0.1` (IP SAN) for the CLI and the LAN hostname or IP used by the phone. Both clients must trust its issuer; do not disable certificate verification.
+2. On the iPhone, set the management URL to the matching `https://…:3233` address, reconnect, and turn on **允许运维更换模型 API Key（仅 HTTPS）**. If you use a private CA, install only its public CA certificate on the test phone and explicitly enable full trust under **Settings → General → About → Certificate Trust Settings**. Verify the CA fingerprint out of band before trusting it. This permission persists independently of task authorization and resets if the management URL or device token changes. The phone must be unlocked and the agent idle; neither mirroring nor a background transition is needed to rotate a key.
+3. On the computer, with `OPS_ADMIN_TOKEN` supplied privately, run the following. If using a private CA, set `OPS_TLS_CA` to its trusted PEM certificate (not a private key). Set `OPS_CLI_TLS=1` or `OPS_TLS_CA` when using `ops_task` with the TLS service.
+
+```bash
+python -m hidagent.ops_key https://api.deepseek.com
+```
+
+Enter the new key at the hidden prompt, or pass `--key-file /path/to/private-file` for automation. The file must be a regular, non-symlink file owned by the current user with no group or other access (e.g. mode `600`); the key itself is never a command-line argument. `POST /api/model/key` takes `baseURL` and `apiKey` over authenticated loopback HTTPS and replies only with `updated: true` after Keychain persistence. It is write-only, refuses an endpoint mismatch, and cannot change provider or model. The relay holds the key in memory while forwarding it over WSS. A write receipt is not provider validation: run the separate fixed red-image model check before submitting a task. If the write receipt is lost, check the model or device before deciding whether to send another update.
+
+A key written by build 18 is stored with its provider endpoint. Build 17 and older do not understand this Keychain format. If you roll back after rotating a key, re-enter the model key in the old App before running tasks.
 
 Telemetry's `app.frameAge` measures source capture age, not the time since JPEG decoding. Cached frames being
 replayed after reconnection are not fresh. `/api/frame.jpg` rejects an unavailable or stale screenshot.

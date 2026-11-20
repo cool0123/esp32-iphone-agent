@@ -11,7 +11,7 @@ enum Mood: String, Codable, Hashable {
     var body: some Scene { WindowGroup { LegacyView(model: model, board: model.board, settings: model.settings, agent: model.agent) } }
 }
 
-@MainActor final class LegacyModel: ObservableObject, OpsTaskApp {
+@MainActor final class LegacyModel: ObservableObject, OpsTaskApp, OpsModelKeyApp {
     let board = BoardLink()
     let settings = Settings()
     let feed = VideoFeed()
@@ -164,6 +164,10 @@ enum Mood: String, Codable, Hashable {
         if let data = try? JSONSerialization.data(withJSONObject: extra, options: [.sortedKeys]),
            let text = String(data: data, encoding: .utf8) { settings.extraBody = text }
     }
+    var opsCanRotateModelKey: Bool {
+        !agent.running && preparing == nil && !remoteStopping && !startingLocally
+    }
+
     private var remoteBoardReady: Bool {
         UIApplication.shared.isProtectedDataAvailable && board.connected && board.status?.usb == "ok" && feed.live
     }

@@ -24,6 +24,41 @@ import XCTest
         XCTAssertThrowsError(try OpsTaskRequest(["task_id": id, "task": "a", "click": true], submit: true))
     }
 
+    func testModelKeyRotationRequiresMatchingHTTPSEndpointAndStrictPayload() throws {
+        let key = "test-only-model-key"
+        let payload = ["baseURL": "https://API.example.com:443/v1/", "apiKey": key]
+        let request = try OpsModelKeyRequest(payload, currentEndpoint: "https://api.example.com/v1")
+        XCTAssertEqual(request.key, key)
+        for endpoint in ["http://api.example.com/v1", "https://api.example.com:8443/v1",
+                         "https://api.example.com/v2", "https://other.example.com/v1",
+                         "https://user@api.example.com/v1", "https://api.example.com/v1?key=old"] {
+            XCTAssertThrowsError(try OpsModelKeyRequest(payload, currentEndpoint: endpoint)) { error in
+                XCTAssertEqual(error.localizedDescription, "provider endpoint mismatch")
+            }
+        }
+        for invalid in ["short", key + "\n", " " + key] {
+            XCTAssertThrowsError(try OpsModelKeyRequest(["baseURL": payload["baseURL"]!, "apiKey": invalid],
+                                                        currentEndpoint: "https://api.example.com/v1"))
+        }
+        XCTAssertThrowsError(try OpsModelKeyRequest(payload.merging(["model": "other"]) { a, _ in a },
+                                                    currentEndpoint: "https://api.example.com/v1"))
+    }
+
+    func testRotatedKeyPersistsOnlyForMatchingEndpoint() throws {
+        let key = "mock-rotation-key"
+        let endpoint = "https://api.example.com/v1"
+        let entry = try StoredModelKey(endpoint: endpoint, key: key).encoded()
+        let account = "rotation-test-" + UUID().uuidString
+        defer { Keychain.set("", for: account) }
+        Keychain.set("legacy-key", for: account)
+        XCTAssertEqual(Keychain.get(account), "legacy-key")
+        XCTAssertTrue(Keychain.replace(entry, for: account))
+        let persisted = Keychain.get(account)
+        XCTAssertEqual(StoredModelKey.resolve(persisted, endpoint: "https://API.example.com:443/v1/", preset: nil), key)
+        XCTAssertEqual(StoredModelKey.resolve(persisted, endpoint: "https://api.example.com/v2", preset: "preset"), "")
+        XCTAssertEqual(StoredModelKey.resolve("legacy-key", endpoint: endpoint, preset: nil), "legacy-key")
+    }
+
     func testConfigValidationRejectsSecretsAndBadValues() {
         XCTAssertThrowsError(try OpsConfig.validated(["apiKey": "secret"]))
         XCTAssertThrowsError(try OpsConfig.validated(["extraBody": "[]"]))

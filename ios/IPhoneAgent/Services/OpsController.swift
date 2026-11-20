@@ -22,6 +22,39 @@ import UIKit
     func cancelOpsTaskOnDisconnect()
 }
 
+/// Only the Legacy target opts into model-key rotation (separate from task authorization).
+@MainActor protocol OpsModelKeyApp: OpsApp {
+    var opsCanRotateModelKey: Bool { get }
+}
+
+struct OpsModelKeyRequest {
+    let key: String
+
+    static func endpoint(_ raw: String) -> String? {
+        guard (1...512).contains(raw.utf8.count), raw.utf8.allSatisfy({ (33...126).contains($0) }),
+              !raw.contains("\\"), var c = URLComponents(string: raw), c.scheme?.lowercased() == "https",
+              let host = c.host, !host.isEmpty, c.user == nil, c.password == nil,
+              c.query == nil, c.fragment == nil, (1...65535).contains(c.port ?? 443) else { return nil }
+        c.scheme = "https"
+        c.host = host.lowercased()
+        if c.port == 443 { c.port = nil }
+        while c.percentEncodedPath.hasSuffix("/") { c.percentEncodedPath.removeLast() }
+        return c.string
+    }
+
+    init(_ params: [String: Any], currentEndpoint: String) throws {
+        guard Set(params.keys) == ["baseURL", "apiKey"], let provided = params["baseURL"] as? String,
+              let key = params["apiKey"] as? String, (8...2048).contains(key.utf8.count),
+              key.utf8.allSatisfy({ (33...126).contains($0) }) else {
+            throw DeviceError(message: "invalid key rotation request")
+        }
+        guard let expected = Self.endpoint(provided), expected == Self.endpoint(currentEndpoint) else {
+            throw DeviceError(message: "provider endpoint mismatch")
+        }
+        self.key = key
+    }
+}
+
 struct OpsTaskRequest {
     let id: String
     let text: String?
@@ -119,8 +152,14 @@ extension AppModel: OpsApp {
 
 /// Outbound remote-operations channel. The phone connects to the service; no inbound listener is needed.
 @MainActor final class OpsController: ObservableObject {
-    @Published var endpoint: String { didSet { defaults.set(endpoint, forKey: "opsEndpoint") } }
-    @Published var token: String { didSet { Keychain.set(token, for: "ops-device-token") } }
+    @Published var endpoint: String { didSet {
+        defaults.set(endpoint, forKey: "opsEndpoint")
+        if endpoint != oldValue { allowsKeyRotation = false; stop() }
+    } }
+    @Published var token: String { didSet {
+        Keychain.set(token, for: "ops-device-token")
+        if token != oldValue { allowsKeyRotation = false; stop() }
+    } }
     @Published var enabled: Bool { didSet {
         defaults.set(enabled, forKey: "opsEnabled")
         enabled ? start() : stop()
@@ -128,16 +167,19 @@ extension AppModel: OpsApp {
     @Published var acceptsTasks = false { didSet {
         if !acceptsTasks { (app as? any OpsTaskApp)?.cancelOpsTaskOnDisconnect() }
     } }
+    @Published var allowsKeyRotation: Bool { didSet { defaults.set(allowsKeyRotation, forKey: "opsKeyRotationEnabled") } }
+    var secureEndpoint: Bool { Self.socketURL(endpoint)?.scheme == "wss" }
     @Published private(set) var state = "Off"
     let deviceID: String
 
     private weak var app: (any OpsApp)?
     private let defaults: UserDefaults
-    private let session: URLSession = .shared
+    private let session = URLSession(configuration: .ephemeral, delegate: NoHTTPRedirects(), delegateQueue: nil)
     private var socket: URLSessionWebSocketTask?
     private var job: Task<Void, Never>?
     private var telemetryJob: Task<Void, Never>?
     private var modelCheckJob: Task<Void, Never>?
+    private var checkingModel = false
     private let sendLock = AsyncLock()
     private var generation = 0
 
@@ -147,6 +189,7 @@ extension AppModel: OpsApp {
         endpoint = defaults.string(forKey: "opsEndpoint") ?? ""
         token = Keychain.get("ops-device-token") ?? ""
         enabled = defaults.bool(forKey: "opsEnabled")
+        allowsKeyRotation = defaults.bool(forKey: "opsKeyRotationEnabled")
         deviceID = defaults.string(forKey: "opsDeviceID") ?? UUID().uuidString
         defaults.set(deviceID, forKey: "opsDeviceID")
     }
@@ -205,6 +248,9 @@ extension AppModel: OpsApp {
             state = "Connected"
             var hello: [String: Any] = ["type": "hello", "device": deviceID, "app": appVersion()]
             if app is any OpsTaskApp { hello["taskProtocol"] = "legacy-task-v1" }
+            if app is any OpsModelKeyApp, socket.originalRequest?.url?.scheme == "wss" {
+                hello["keyProtocol"] = "model-key-v1"
+            }
             try await send(hello, on: socket)
             telemetryJob = Task { [weak self] in
                 while !Task.isCancelled {
@@ -260,6 +306,9 @@ extension AppModel: OpsApp {
 
     func checkModel() async throws -> String {
         guard let app else { throw DeviceError(message: "app unavailable") }
+        guard !checkingModel else { throw DeviceError(message: "model check already running") }
+        checkingModel = true
+        defer { checkingModel = false }
         let client = try await app.settings.client("actor")
         let image = UIGraphicsImageRenderer(size: CGSize(width: 256, height: 256)).image { context in
             UIColor.red.setFill()
@@ -312,6 +361,18 @@ extension AppModel: OpsApp {
             let params = message["params"] as? [String: Any] ?? [:]
             let data: [String: Any]
             switch name {
+            case "model.key.rotate":
+                guard enabled, allowsKeyRotation, secureEndpoint, self.socket === socket,
+                      socket.originalRequest?.url?.scheme == "wss", let target = app as? any OpsModelKeyApp else {
+                    throw DeviceError(message: "rotation disabled")
+                }
+                guard target.opsCanRotateModelKey, modelCheckJob == nil, !checkingModel, !Task.isCancelled,
+                      UIApplication.shared.isProtectedDataAvailable else {
+                    throw DeviceError(message: "app busy or phone locked")
+                }
+                let request = try OpsModelKeyRequest(params, currentEndpoint: app.settings.baseURL)
+                try app.settings.rotateModelKey(request.key)
+                data = ["updated": true]
             case "task.submit", "task.status", "task.stop":
                 guard let tasks = app as? any OpsTaskApp else { throw DeviceError(message: "remote tasks unsupported") }
                 let request = try OpsTaskRequest(params, submit: name == "task.submit")

@@ -17,8 +17,10 @@ ESP32 USB board. The developer runs no servers for it and receives no data from 
   reports from iOS are stored in the app's own storage. The Wi-Fi video reader can cache up to 64 MiB of
   H.264 reference pictures locally to recover after relaunch; deleting a run does not erase that cache.
   Removing the app removes its local run and cache files.
-- **API key.** Your model API key is stored in the iOS Keychain on this device and is never written to logs
-  or exports.
+- **API key.** Your model API key is stored in the iOS Keychain. If you opt into rotation in the iOS 15 app,
+  the trusted management service forwards the new key over TLS in memory; the phone confirms the write
+  without returning the key. Do not store it in command lines, logs or exports. The service operator must
+  keep the relay and its TLS private key secure.
 - **Bluetooth and Wi-Fi.** The app connects to the ESP32 board over Bluetooth and may join the board's own
   Wi-Fi hotspot. It does not scan for or record other devices or networks.
 - **Sharing.** Exports mask the top of screenshots, not the content below it. Review screenshots and task
