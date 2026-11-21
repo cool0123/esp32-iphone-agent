@@ -234,27 +234,52 @@ extension ScreenSource {
     /// Restart continuous forwarding only after the command channel is ready. Preserve the board clock:
     /// a newly decoded historical prefix must keep its original source age.
     func restartStreamAfterLink() async throws {
+        try Task.checkCancellation()
         guard let device, device.connected else { throw DeviceError(message: "board not connected") }
         let link = device.links
-        try await stream(false)
-        // The firmware video task polls at 20 ms; let it observe OFF before issuing ON.
-        try await Task.sleep(nanoseconds: 200_000_000)
-        guard device.connected, device.links == link else { throw DeviceError(message: "board link changed during video restart") }
-        if device is CommandChannel {
-            do {
-                let endpoint = try VideoEndpoint(reply: await device.send("monitor on"))
-                guard device.connected, device.links == link else { throw DeviceError(message: "board link changed during video restart") }
-                startWiFi(endpoint, link: link)
-                return
-            } catch {
-                guard device.connected, device.links == link else { throw DeviceError(message: "board link changed during video restart") }
-                DebugLog.write("Wi-Fi video unavailable; using BLE")
-            }
-        }
+        stopWiFi()
+        let restart = wifiGeneration
+        streamOn = false
         assembler.reset()
         invalidateVideo()
         note = "waiting for a complete keyframe"
-        try await stream(true)
+        func checkRestart() throws {
+            try Task.checkCancellation()
+            guard device.connected, device.links == link else {
+                throw DeviceError(message: "board link changed during video restart")
+            }
+            guard wifiGeneration == restart else { throw CancellationError() }
+        }
+        try await device.send("stream off")
+        // The firmware video task polls at 20 ms; let it observe OFF before issuing ON.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        try checkRestart()
+        if let channel = device as? CommandChannel {
+            // BLE can be ready before the board has a usable LAN address. Do not pin the session
+            // to BLE after one transient monitor startup failure.
+            for attempt in 0..<3 {
+                if attempt > 0 { try await Task.sleep(nanoseconds: 1_000_000_000) }
+                try checkRestart()
+                do {
+                    let reply = try await channel.send("monitor on", timeout: 3)
+                    try checkRestart()
+                    let endpoint = try VideoEndpoint(reply: reply)
+                    startWiFi(endpoint, link: link)
+                    return
+                } catch {
+                    try checkRestart()
+                }
+            }
+            DebugLog.write("Wi-Fi video unavailable after startup retries; using BLE")
+        }
+        try checkRestart()
+        // Discard any BLE chunks already in flight when the board received stream off.
+        assembler.reset()
+        invalidateVideo()
+        note = "waiting for a complete keyframe"
+        try await device.send("stream on")
+        try checkRestart()
+        streamOn = true
         DebugLog.write("video forwarding restarted after link readiness; waiting for live source")
     }
 
@@ -264,6 +289,8 @@ extension ScreenSource {
         wifiSession?.invalidateAndCancel(); wifiSession = nil
         transport = "ble"; networkReady = true; wifiPublishStream = nil; wifiClockOffset = nil
     }
+
+    private struct MonitorRenewalFailed: Error {}
 
     private func startWiFi(_ endpoint: VideoEndpoint, link: Int) {
         stopWiFi()
@@ -288,7 +315,29 @@ extension ScreenSource {
                       device.connected, device.links == link else { return }
                 do {
                     if now() - renewed > 600 {
-                        endpoint = try VideoEndpoint(reply: await device.send("monitor on"))
+                        let next: VideoEndpoint
+                        do {
+                            let reply: String
+                            if let channel = device as? CommandChannel {
+                                reply = try await channel.send("monitor on", timeout: 3)
+                            } else {
+                                reply = try await device.send("monitor on")
+                            }
+                            next = try VideoEndpoint(reply: reply)
+                        } catch {
+                            try Task.checkCancellation()
+                            // No video bytes were consumed. Keep the exact cursor and decoder references
+                            // so a temporary renewal failure cannot become a cold start without an IDR.
+                            throw MonitorRenewalFailed()
+                        }
+                        try Task.checkCancellation()
+                        guard self.wifiGeneration == generation, device.connected, device.links == link else { return }
+                        if next.base != endpoint.base {
+                            cursor = VideoCursor(); saved = nil
+                            self.wifiClockOffset = nil
+                            self.videoNetworkFailed(invalidChain: true)
+                        }
+                        endpoint = next
                         renewed = now()
                     }
                     let started = now()
@@ -326,10 +375,11 @@ extension ScreenSource {
                     failures = 0
                     try await Task.sleep(nanoseconds: 100_000_000)
                 } catch {
-                    if Task.isCancelled || self.wifiGeneration != generation { return }
+                    if Task.isCancelled || self.wifiGeneration != generation || !device.connected || device.links != link { return }
                     failures += 1
-                    self.videoNetworkFailed(invalidChain: !(error is URLError || error is VideoHTTPUnavailable))
-                    if !(error is URLError || error is VideoHTTPUnavailable) {
+                    let invalidChain = !(error is URLError || error is VideoHTTPUnavailable || error is MonitorRenewalFailed)
+                    self.videoNetworkFailed(invalidChain: invalidChain)
+                    if invalidChain {
                         cursor = VideoCursor(); saved = nil
                     }
                     if failures == 1 {
@@ -337,6 +387,7 @@ extension ScreenSource {
                         let failure: String
                         if let urlError = error as? URLError { failure = "URL error \(urlError.code.rawValue)" }
                         else if let unavailable = error as? VideoHTTPUnavailable { failure = "HTTP \(unavailable.status)" }
+                        else if error is MonitorRenewalFailed { failure = "monitor renewal failed" }
                         else { failure = "invalid video chain" }
                         DebugLog.write("Wi-Fi video interrupted (\(failure)); input remains blocked until fresh decoding")
                     }

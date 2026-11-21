@@ -7,13 +7,22 @@ import XCTest
     var lines: [String] = []
     var drops = 0
     var silent = false
+    var replies: [String: [String]] = [:]
     weak var channel: CommandChannel?
 
     func write(_ line: String) throws {
         lines.append(line)
         guard !silent else { return }
         let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
-        let reply = parts[1] == "bad" ? "\(parts[0]) err unknown command" : "\(parts[0]) ok"
+        let command = parts[1]
+        let body: String
+        if var queued = replies[command], !queued.isEmpty {
+            body = queued.removeFirst()
+            replies[command] = queued
+        } else {
+            body = command == "bad" ? "err unknown command" : "ok"
+        }
+        let reply = "\(parts[0]) \(body)"
         Task { @MainActor in self.channel?.handleReply(reply) }
     }
 
@@ -325,6 +334,61 @@ import XCTest
         XCTAssertFalse(feed.live)
         feed.show(Data([0xff, 0xd8]), width: 320, height: 480)
         XCTAssertGreaterThan(now() - feed.capturedAt, 599)  // preserved clock rejects the old prefix
+        XCTAssertFalse(feed.live)
+    }
+
+    func testVideoStartupRecoversWiFiAfterFirstMonitorFailure() async throws {
+        let feed = VideoFeed(), board = FakeBoard()
+        let channel = CommandChannel(transport: board)
+        board.channel = channel
+        let fixture = String(repeating: "a", count: 48)
+        board.replies["monitor on"] = ["err LAN address unavailable", "ok 192.168.1.2 3235 \(fixture)"]
+        channel.linkUp()
+        feed.device = channel
+        try await feed.restartStreamAfterLink()
+        XCTAssertEqual(board.lines.map { String($0.split(separator: " ", maxSplits: 1)[1]) },
+                       ["stream off", "monitor on", "monitor on"])
+        XCTAssertEqual(feed.transport, "wifi")
+        XCTAssertTrue(feed.streamOn)
+        XCTAssertFalse(feed.live) // no real response or fresh frame needed for this test
+        feed.linkLost() // cancel the queued fetch before yielding to it
+    }
+
+    func testVideoStartupFallsBackAfterBoundedMonitorAttempts() async throws {
+        let feed = VideoFeed(), board = FakeBoard()
+        let channel = CommandChannel(transport: board)
+        board.channel = channel
+        board.replies["monitor on"] = ["err LAN address unavailable", "ok 192.0.2.1 3235 invalid"]
+        channel.linkUp()
+        feed.device = channel
+        try await feed.restartStreamAfterLink()
+        XCTAssertEqual(board.lines.map { String($0.split(separator: " ", maxSplits: 1)[1]) },
+                       ["stream off", "monitor on", "monitor on", "monitor on", "stream on"])
+        XCTAssertEqual(feed.transport, "ble")
+        XCTAssertTrue(feed.streamOn)
+        XCTAssertFalse(feed.live)
+    }
+
+    func testResetDuringMonitorRetryCancelsOldRestart() async {
+        let feed = VideoFeed(), board = FakeBoard()
+        let channel = CommandChannel(transport: board)
+        board.channel = channel
+        board.replies["monitor on"] = ["err LAN address unavailable"]
+        channel.linkUp()
+        feed.device = channel
+        let restart = Task { try await feed.restartStreamAfterLink() }
+        defer { restart.cancel() }
+        let deadline = now() + 2
+        while board.lines.count < 2 && now() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(board.lines.count, 2)
+        feed.linkLost()
+        do { try await restart.value; XCTFail("obsolete restart must not proceed") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(board.lines.map { String($0.split(separator: " ", maxSplits: 1)[1]) },
+                       ["stream off", "monitor on"])
+        XCTAssertFalse(feed.streamOn)
         XCTAssertFalse(feed.live)
     }
 
