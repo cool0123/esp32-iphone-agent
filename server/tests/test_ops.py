@@ -160,6 +160,13 @@ def test_reconnect_reports_phone_task_result_without_resubmission():
             assert responses[0].json()["data"] == completed
 
 
+def test_capture_size_is_validated_server_side():
+    assert valid_config({"captureSize": "414x736"}) == {"captureSize": "414x736"}
+    for bad in ("", "414", "414x", "x736", "159x736", "414x2561", "414x736x1", "a x b", "414,736"):
+        with pytest.raises(ValueError):
+            valid_config({"captureSize": bad})
+
+
 def test_config_round_trip_and_snapshot():
     with client() as c:
         with c.websocket_connect("/ws/device", headers=DEVICE) as ws:

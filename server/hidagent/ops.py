@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 
 ALLOWED_CONFIG = {
     "baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody", "agentName", "frameMode",
+    "captureSize",
 }
 
 
@@ -81,6 +82,13 @@ def valid_config(patch: dict[str, str]) -> dict[str, str]:
                 raise ValueError("baseURL must be an HTTP(S) URL without credentials")
         elif key == "frameMode" and value not in ("stream", "snap"):
             raise ValueError("frameMode must be stream or snap")
+        elif key == "captureSize":
+            parts = value.lower().split("x")
+            if len(parts) != 2 or not all(p.isdigit() for p in parts):
+                raise ValueError("captureSize must be WIDTHxHEIGHT")
+            width, height = int(parts[0]), int(parts[1])
+            if not 160 <= width <= 1920 or not 160 <= height <= 2560:
+                raise ValueError("captureSize is out of range")
         elif key == "tokenParam" and (not value or len(value) > 40):
             raise ValueError("invalid tokenParam")
         elif key == "extraBody":
