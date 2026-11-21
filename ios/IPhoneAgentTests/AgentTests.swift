@@ -123,6 +123,20 @@ import XCTest
         XCTAssertTrue(agent.repeating(swipe))
     }
 
+    func testSameDirectionSwipeIsTheSameMoveDespiteJitter() {
+        let a: JObject = ["action": .str("swipe"), "x1": .int(200), "y1": .int(500), "x2": .int(800), "y2": .int(500)]
+        for y in [450, 600, 700] {
+            let b: JObject = ["action": .str("swipe"), "x1": .int(210), "y1": .int(y), "x2": .int(790), "y2": .int(y)]
+            XCTAssertTrue(Actions.sameMove(a, b), "\(y)")
+        }
+        let left: JObject = ["action": .str("swipe"), "x1": .int(800), "y1": .int(500), "x2": .int(200), "y2": .int(500)]
+        XCTAssertFalse(Actions.sameMove(a, left))  // the other direction scrolls the other way
+        let short: JObject = ["action": .str("swipe"), "x1": .int(400), "y1": .int(500), "x2": .int(450), "y2": .int(500)]
+        XCTAssertFalse(Actions.sameMove(a, short))
+        let vertical: JObject = ["action": .str("swipe"), "x1": .int(500), "y1": .int(200), "x2": .int(500), "y2": .int(800)]
+        XCTAssertFalse(Actions.sameMove(a, vertical))
+    }
+
     func testRepeatingANudgedTapOnTheSameTargetIsStuck() {
         let agent = AgentLoop(phone: nil, screen: nil, actor: nil, planner: nil, trace: nil)
         let tap: JObject = ["action": .str("tap"), "x": .int(500), "y": .int(120)]

@@ -80,7 +80,15 @@ enum Actions {
     /// The actor often nudges a target by a few units and repeats the same miss, which an exact match misses.
     static func sameMove(_ a: JObject, _ b: JObject, slack: Double = 25) -> Bool {
         guard a["action"] == b["action"] else { return false }
-        for arg in actions[a["action"]?.str ?? ""] ?? [] {
+        let name = a["action"]?.str ?? ""
+        // A swipe is the same gesture when it goes the same way over a similar distance. The model routinely
+        // retries an ineffective swipe with a slightly different y (450, 500, 600, 700); comparing coordinates
+        // would never call that a repeat and the run burns its whole step budget on it.
+        if name == "swipe", let swipe = swipeShape(a), let other = swipeShape(b) {
+            return swipe.horizontal == other.horizontal && swipe.sign == other.sign
+                && abs(swipe.span - other.span) <= max(slack * 4, swipe.span * 0.5)
+        }
+        for arg in actions[name] ?? [] {
             if let x = a[arg]?.double, let y = b[arg]?.double {
                 if abs(x - y) > slack { return false }
             } else if a[arg] != b[arg] {
@@ -88,6 +96,17 @@ enum Actions {
             }
         }
         return true
+    }
+
+    /// Dominant axis, its direction and the travel distance of a swipe, in model grid units.
+    private static func swipeShape(_ o: JObject) -> (horizontal: Bool, sign: Int, span: Double)? {
+        guard let x1 = o["x1"]?.double, let y1 = o["y1"]?.double,
+              let x2 = o["x2"]?.double, let y2 = o["y2"]?.double else { return nil }
+        let dx = x2 - x1, dy = y2 - y1
+        let horizontal = abs(dx) >= abs(dy)
+        let primary = horizontal ? dx : dy
+        guard abs(primary) >= 40 else { return nil }  // too short to be a scroll
+        return (horizontal, primary < 0 ? -1 : 1, abs(primary))
     }
 
     // MARK: - helpers
