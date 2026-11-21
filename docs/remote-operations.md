@@ -318,7 +318,7 @@ cause or long-term supply stability. Cold/P-only recovery remains unresolved.
 
 ### Overflow policy (unreleased board build)
 
-The board retains the newest access units on GTP capacity exhaustion instead of wiping the GOP: a running
+The board retains the newest access units on GOP capacity exhaustion instead of wiping the GOP: a running
 LAN subscriber keeps its byte cursor, so an overflow no longer interrupts live video, and only a cold start
 (the retained head is not an IDR) still waits for a keyframe. Index-based BLE consumers restart because AU
 indices move. The live continuation ring grew from 1 MB to 3 MB with 2 MB / 1 MB fallbacks, because at
