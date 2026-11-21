@@ -60,6 +60,28 @@ enum Vision {
         return hits >= 6
     }
 
+    /// True only when a substantial share of the screen differs.
+    ///
+    /// Used for the pre-action check, where a decision was made on the frame the model saw. A persistent local
+    /// animation (spinner, cursor, status clock, video artifact) must not reject every proposal forever, while a
+    /// real navigation or scroll still must.
+    static func materiallyChanged(_ before: Data?, _ after: Data?, ignore: [CGPoint] = []) -> Bool {
+        guard let before, let after, let a = image(before), let b = image(after) else { return true }
+        if a.width != b.width || a.height != b.height { return true }
+        let w = max(a.width / 2, 1), h = max(a.height / 2, 1)
+        let fa = gray(a, w, h), fb = gray(b, w, h)
+        let masks = ignore.map { (Double($0.x) * Double(w), Double($0.y) * Double(h)) }
+        let r2 = pow(0.05 * Double(w), 2)
+        var hits = 0
+        for i in 0..<(w * h) where abs(Int(fa.px[i]) - Int(fb.px[i])) > 25 {
+            let x = Double(i % w), y = Double(i / w)
+            if y > topMask * Double(h) && masks.allSatisfy({ pow(x - $0.0, 2) + pow(y - $0.1, 2) > r2 }) {
+                hits += 1
+            }
+        }
+        return hits >= max(6, (w * h) / 400)  // 0.25% of the screen: more than a clock, cursor or spinner
+    }
+
     /// Where the pointer is in `before`, given it moved right by `shift` (fraction of width) in `after`.
     ///
     /// Only the pointer moved between the two frames, so the changed pixels within `reach` of `near` are the

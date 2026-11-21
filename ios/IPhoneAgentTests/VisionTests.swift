@@ -11,7 +11,8 @@ final class VisionTests: XCTestCase {
     var H: Double { Double(Self.H) }
 
     /// A synthetic home screen: gradient background, optional button, pointer dot and checkmark.
-    func screen(pointer: (Double, Double)? = nil, button: Bool = false, checked: Bool = false) -> Data {
+    func screen(pointer: (Double, Double)? = nil, button: Bool = false, checked: Bool = false,
+                dot: (Double, Double)? = nil) -> Data {
         let ctx = CGContext(data: nil, width: Self.W, height: Self.H, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
         ctx.translateBy(x: 0, y: CGFloat(Self.H))  // draw with a top-left origin, like PIL
@@ -26,6 +27,10 @@ final class VisionTests: XCTestCase {
         if button {
             ctx.setFillColor(rgb(250, 250, 250))
             ctx.fill(CGRect(x: 150, y: 400, width: 201, height: 201))
+        }
+        if let (x, y) = dot {  // a small animated element, far smaller than a navigation
+            ctx.setFillColor(rgb(240, 40, 40))
+            ctx.fill(CGRect(x: x - 4, y: y - 4, width: 9, height: 9))
         }
         if let (x, y) = pointer {
             ctx.setFillColor(rgb(200, 200, 200))
@@ -53,6 +58,19 @@ final class VisionTests: XCTestCase {
 
     func testNewContentIsAScreenChange() {
         XCTAssertTrue(Vision.changed(screen(pointer: (260, 856)), screen(pointer: (260, 856), button: true)))
+    }
+
+    func testLocalizedAnimationIsNotAMaterialScreenChange() {
+        // A small redraw (spinner, cursor, clock) still counts as "changed" for post-action feedback...
+        XCTAssertTrue(Vision.changed(screen(), screen(dot: (60, 600))))
+        // ...but must not reject a proposal made on an almost identical frame.
+        XCTAssertFalse(Vision.materiallyChanged(screen(), screen(dot: (60, 600))))
+        XCTAssertFalse(Vision.materiallyChanged(screen(), screen(dot: (60, 600)), ignore: [p(60, 600)]))
+    }
+
+    func testNavigationIsAMaterialScreenChange() {
+        XCTAssertTrue(Vision.materiallyChanged(screen(), screen(button: true)))
+        XCTAssertTrue(Vision.materiallyChanged(nil, screen()))
     }
 
     func testMissingFrameCountsAsChanged() {

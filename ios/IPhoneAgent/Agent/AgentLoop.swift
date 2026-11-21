@@ -91,6 +91,7 @@ extension Pointer: Gestures {}
     @Published private(set) var shots: [Int: Data] = [:]  // step index -> screenshot the model decided on
     @Published private(set) var running = false
     private var pointerAt = CGPoint.zero  // last pointer position (screen fractions)
+    private var discards = 0  // consecutive proposals rejected because the frame moved on
     /// When the last gesture ended: the model never decides on a frame from before it.
     private(set) var lastActed = 0.0
     /// Awaited before every look and every gesture (the app holds the run while its own UI is in front).
@@ -331,12 +332,17 @@ extension Pointer: Gestures {}
         try await gate?()
         try Task.checkCancellation()
         let feed = screen as? VideoFeed
-        guard screen.live, planned.link == phone?.device.links, planned.stream == feed?.streamID,
-              let seen = planned.shot, let current = screen.frame,
-              seen == current || !Vision.changed(seen, current, ignore: [pointerAt]) else {
-            record(nil, ["action": .str("look again"), "reason": .str("screen or connection changed; decision discarded")])
-            return false
+        if !screen.live || planned.link != phone?.device.links || planned.stream != feed?.streamID {
+            return try await discard("screen or connection changed; decision discarded")
         }
+        guard let seen = planned.shot, let current = screen.frame else {
+            return try await discard("screen or connection changed; decision discarded")
+        }
+        // A slightly older frame is fine when only a small area keeps animating; a real screen change is not.
+        if seen != current && Vision.materiallyChanged(seen, current, ignore: [pointerAt]) {
+            return try await discard("screen or connection changed; decision discarded")
+        }
+        discards = 0
         let stuck = repeating(act)
         if name == "replan" || stuck {
             record(planned.shot, act)
@@ -364,6 +370,17 @@ extension Pointer: Gestures {}
         if screen.live, screen.capturedAt > lastActed {
             steps[steps.count - 1]["changed"] = .bool(Vision.changed(seen, screen.frame, ignore: spots))
         }
+        return false
+    }
+
+    /// Records a discarded proposal and re-plans once the same frame keeps being rejected, instead of burning
+    /// the whole step budget on "look again" while a local animation keeps redrawing.
+    private func discard(_ reason: String) async throws -> Bool {
+        record(nil, ["action": .str("look again"), "reason": .str(reason)])
+        discards += 1
+        guard discards >= 3 else { return false }
+        discards = 0
+        try await replan(stuck: true)
         return false
     }
 
