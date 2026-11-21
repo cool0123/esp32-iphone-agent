@@ -322,7 +322,7 @@ extension Pointer: Gestures {}
         guard let screen else { throw BlindError() }
         let proposals = try await nextActions()
         guard let planned = proposals.first else { throw BlindError() }
-        let act = planned.act
+        var act = planned.act
         var timing = Metrics.Step()
         timing.llmMs = (act["think_s"]?.double ?? 0) * 1000
         let name = act["action"]?.str ?? ""
@@ -358,7 +358,6 @@ extension Pointer: Gestures {}
             return true
         }
         // A target that already swallowed a tap gets nudged aside, so a floating button cannot eat every attempt.
-        var act = act
         var nudged = false
         if name == "tap" || name == "click", let target = tapPoint(act), let shifted = Self.avoidDeadTap(target, deadTaps) {
             act["x"] = .int(Int((shifted.x * 1000).rounded()))
