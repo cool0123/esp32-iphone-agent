@@ -288,6 +288,7 @@ void startAirplay() {
 }
 
 void setup() {
+  cfg_migrate_res();  // before any cfg_* read and before AirPlay advertises a size
   Serial.begin(115200);
 #if DEBUG_SERIAL
   for (int i = 0; i < 30 && !Serial; i++) delay(100);  // give a serial monitor 3 s to catch the boot lines

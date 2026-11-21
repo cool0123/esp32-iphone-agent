@@ -245,8 +245,21 @@ int net_peers() { return mode == "sta" ? WiFi.status() == WL_CONNECTED : WiFi.so
 int net_rssi() { return mode == "sta" && WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0; }
 bool net_up() { return mode == "sta" ? WiFi.status() == WL_CONNECTED : true; }
 
-uint16_t cfg_width() { return prefs.getUShort("w", 480); }
-uint16_t cfg_height() { return prefs.getUShort("h", 1040); }
+// On-screen text has to be readable for the model to place taps, so the default mirrors at the handset's
+// logical size rather than a small preview.
+static const uint16_t CFG_W = 414, CFG_H = 736;
+
+uint16_t cfg_width() { return prefs.getUShort("w", CFG_W); }
+uint16_t cfg_height() { return prefs.getUShort("h", CFG_H); }
+
+/// The first firmware default advertised 320x480: too small to read a tab label reliably. Move that legacy
+/// value once; an operator who sets another size with `res` keeps it.
+void cfg_migrate_res() {
+  if (prefs.getUShort("w", 0) == 320 && prefs.getUShort("h", 0) == 480) {
+    prefs.putUShort("w", CFG_W);
+    prefs.putUShort("h", CFG_H);
+  }
+}
 uint8_t cfg_fps() { return prefs.getUChar("fps", 5); }
 
 void cfg_set_res(uint16_t w, uint16_t h) {
