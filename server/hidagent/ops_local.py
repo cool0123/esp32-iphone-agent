@@ -12,7 +12,10 @@ class NoRedirects(HTTPRedirectHandler):
 
 def local_ops(*, require_tls=False):
     ca_file = os.environ.get("OPS_TLS_CA")
-    tls = require_tls or bool(ca_file) or os.environ.get("OPS_CLI_TLS") == "1"
+    # The loopback hop stays local either way; plaintext is for services started with
+    # OPS_KEY_ROTATION_PLAIN_WS=1, where only the phone hop lacks TLS.
+    tls = bool(ca_file) or os.environ.get("OPS_CLI_TLS") == "1" or (
+        require_tls and os.environ.get("OPS_CLI_PLAIN") != "1")
     handlers = [ProxyHandler({}), NoRedirects()]
     if tls:
         handlers.append(HTTPSHandler(context=ssl.create_default_context(cafile=ca_file)))

@@ -1,4 +1,4 @@
-"""Rotate the phone's model API key over a verified local TLS connection."""
+"""Rotate the phone's model API key through the local Ops service (TLS unless OPS_CLI_PLAIN=1)."""
 
 import argparse
 import getpass
