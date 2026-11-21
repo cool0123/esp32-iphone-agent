@@ -7,7 +7,7 @@ static bool gop_window(const gop_buf *g, size_t start, size_t budget, gop_view *
   while (first < g->n && g->aus[first].off < start) first++;
   if (first == g->n || g->aus[first].off != start || !g->cfg_len) return false;
   *v = (gop_view){0};
-  v->gen = g->gen; v->cfg_len = g->cfg_len;
+  v->gen = g->gen; v->revision = g->revision; v->cfg_len = g->cfg_len;
   memcpy(v->cfg, g->cfg, g->cfg_len);
   for (int i = first; i < g->n; i++) {
     const gop_au *a = &g->aus[i];

@@ -95,6 +95,7 @@ bool gop_can_continue(const gop_buf *g, uint32_t sent_gen, int sent_n) {
 bool gop_view_open(const gop_buf *g, gop_view *view) {
   if (g->wait_idr || g->n == 0 || !g->cfg_len || !g->aus[0].idr) return false;
   view->gen = g->gen;
+  view->revision = g->revision;
   view->captured_ms = g->aus[g->n - 1].ts;
   view->bytes = g->used;
   view->cfg_len = g->cfg_len;
@@ -103,7 +104,8 @@ bool gop_view_open(const gop_buf *g, gop_view *view) {
 }
 
 bool gop_view_read(const gop_buf *g, const gop_view *view, size_t offset, uint8_t *out, size_t len) {
-  if (g->gen != view->gen || view->bytes > g->used || offset > view->bytes || len > view->bytes - offset) return false;
+  if (g->gen != view->gen || g->revision != view->revision ||
+      view->bytes > g->used || offset > view->bytes || len > view->bytes - offset) return false;
   memcpy(out, g->arena + offset, len);
   return true;
 }

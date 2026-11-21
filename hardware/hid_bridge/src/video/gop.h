@@ -58,6 +58,7 @@ bool avcc_to_annexb(uint8_t *p, size_t len);
 // network I/O happens between reads, never while holding that lock.
 typedef struct {
   uint32_t gen, captured_ms;
+  uint32_t revision;  // an in-flight prefix is invalid once older AUs are dropped and offsets move
   size_t bytes, cfg_len;
   uint8_t cfg[GOP_CFG_MAX];
 } gop_view;
