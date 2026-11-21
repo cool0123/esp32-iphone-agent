@@ -1,5 +1,6 @@
 import CoreBluetooth
 import Foundation
+import UIKit
 
 /// CoreBluetooth central for the board: scan, connect (bonding happens on the first `net` read), command
 /// writes, status / reply / video notifies. Reconnects on its own; restores state when iOS relaunches the app.
@@ -29,6 +30,22 @@ import Foundation
     var onLinkPreparing: (() -> Void)?  // reset video before enabling any notifications
     var onLinkUp: (() -> Void)?
     var onLinkDown: (() -> Void)?
+    private var reconnectWindow: UIBackgroundTaskIdentifier = .invalid
+
+    /// Keeps the app runnable for ~28 s after a link drop so a rebooted board can be picked up again.
+    private func startReconnectWindow() {
+        endReconnectWindow()
+        reconnectWindow = UIApplication.shared.beginBackgroundTask(withName: "board-reconnect") { [weak self] in
+            self?.endReconnectWindow()
+        }
+        DebugLog.write("board link lost; reconnect window opened")
+    }
+
+    private func endReconnectWindow() {
+        guard reconnectWindow != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(reconnectWindow)
+        reconnectWindow = .invalid
+    }
     private var lastNotify = 0.0  // last notification of any kind, to tell a supervision timeout from a peer drop
     private var statusRevision = 0
     private var readySince = 0.0
@@ -405,6 +422,10 @@ extension BoardLink: CBCentralManagerDelegate {
                                   lastNotify > 0 ? now() - lastNotify : -1, readySince > 0 ? now() - readySince : -1))
             setDisconnected()
             if let error { lastError = error.localizedDescription }
+            // A board reset usually brings the link back within ~20 s. Ask iOS for a short background window so
+            // the reconnect happens while the app is in the background instead of waiting for the user to
+            // reopen it (a suspended app cannot reconnect at all).
+            startReconnectWindow()
             retryTask?.cancel()
             retryTask = Task { [weak self] in
                 guard (try? await Task.sleep(nanoseconds: 2_000_000_000)) != nil else { return }
@@ -497,6 +518,7 @@ extension BoardLink: CBPeripheralDelegate {
                         pairedID = p.identifier
                         UserDefaults.standard.set(p.identifier.uuidString, forKey: Self.pairedKey)
                         readySince = now()
+                        endReconnectWindow()  // the board is back: release the background window
                         commands.linkUp()
                         startFullStatusReads()
                         onLinkUp?()
