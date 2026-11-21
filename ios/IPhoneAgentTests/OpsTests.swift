@@ -26,6 +26,31 @@ import XCTest
         XCTAssertFalse(OpsController(app: app, defaults: defaults).acceptsTasks)
     }
 
+    func testRotateTransportIsWSSOrExplicitPrivateLANPlaintext() throws {
+        let suite = "ops-rotate-transport-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let ops = OpsController(app: TaskOpsStub(), defaults: defaults)
+        for endpoint in ["https://ops.example.com", "https://192.168.3.2:3233"] {
+            ops.endpoint = endpoint
+            XCTAssertTrue(ops.rotateAllowedTransport, endpoint)
+        }
+        for endpoint in ["http://192.168.3.2:3233", "http://10.1.2.3:8787", "http://172.16.0.9"] {
+            ops.endpoint = endpoint
+            XCTAssertTrue(ops.rotateAllowedTransport, endpoint)
+            XCTAssertFalse(ops.secureEndpoint)
+        }
+        for endpoint in ["http://ops.example.com", "http://192.168.3.2.evil.com", "http://8.8.8.8"] {
+            ops.endpoint = endpoint
+            XCTAssertFalse(ops.rotateAllowedTransport, endpoint)
+        }
+        XCTAssertTrue(OpsController.privateIPv4Host("192.168.3.2"))
+        for host in ["localhost", "127.0.0.1", "192.168.3", "192.168.3.256", "10.0.0.1.evil",
+                     "203.0.113.9", "::1", "192.168.3.02"] {
+            XCTAssertFalse(OpsController.privateIPv4Host(host), host)
+        }
+    }
+
     func testSocketRequiresHTTPSExceptForLocalTests() throws {
         let secure = try XCTUnwrap(OpsController.socketURL("https://ops.example.com/base"))
         XCTAssertEqual(secure.scheme, "wss")

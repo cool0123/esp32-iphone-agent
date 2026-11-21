@@ -171,6 +171,22 @@ extension AppModel: OpsApp {
     } }
     @Published var allowsKeyRotation: Bool { didSet { defaults.set(allowsKeyRotation, forKey: "opsKeyRotationEnabled") } }
     var secureEndpoint: Bool { Self.socketURL(endpoint)?.scheme == "wss" }
+
+    /// Where rotation may travel. WSS always; plain WS only to a private IPv4 literal, so an operator
+    /// who enables the dedicated rotation switch can hand this phone a key without first installing a
+    /// CA profile. Nothing else on the management connection gains from this: the switch is separate
+    /// from task submission, and the service still binds administration to loopback.
+    static func privateIPv4Host(_ host: String) -> Bool {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false).compactMap { UInt8($0) }
+        guard parts.count == 4, host == parts.map(String.init).joined(separator: ".") else { return false }
+        return parts[0] == 10 || (parts[0] == 192 && parts[1] == 168) ||
+            (parts[0] == 172 && (16...31).contains(parts[1]))
+    }
+
+    var rotateAllowedTransport: Bool {
+        guard let url = Self.socketURL(endpoint), let host = url.host else { return false }
+        return url.scheme == "wss" || (url.scheme == "ws" && Self.privateIPv4Host(host))
+    }
     @Published private(set) var state = "Off"
     let deviceID: String
 
@@ -263,7 +279,7 @@ extension AppModel: OpsApp {
             socket.resume()
             var hello: [String: Any] = ["type": "hello", "device": deviceID, "app": appVersion()]
             if app is any OpsTaskApp { hello["taskProtocol"] = "legacy-task-v1" }
-            if app is any OpsModelKeyApp, socket.originalRequest?.url?.scheme == "wss" {
+            if app is any OpsModelKeyApp, rotateAllowedTransport {
                 hello["keyProtocol"] = "model-key-v1"
             }
             try await send(hello, on: socket)
@@ -386,8 +402,8 @@ extension AppModel: OpsApp {
             let data: [String: Any]
             switch name {
             case "model.key.rotate":
-                guard enabled, allowsKeyRotation, secureEndpoint, self.socket === socket,
-                      socket.originalRequest?.url?.scheme == "wss", let target = app as? any OpsModelKeyApp else {
+                guard enabled, allowsKeyRotation, rotateAllowedTransport, self.socket === socket,
+                      let target = app as? any OpsModelKeyApp else {
                     throw DeviceError(message: "rotation disabled")
                 }
                 guard target.opsCanRotateModelKey, modelCheckJob == nil, !checkingModel, !Task.isCancelled,

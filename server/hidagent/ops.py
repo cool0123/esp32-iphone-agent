@@ -126,6 +126,8 @@ class OpsHub:
         self.key_protocol = False
         self.pending: dict[str, asyncio.Future] = {}
         self.send_lock = asyncio.Lock()
+        # Explicit operator opt-in: accept the rotation hello/relay over plain WS on a private LAN.
+        self.allow_plain_ws = False
 
     @property
     def connected(self):
@@ -164,7 +166,8 @@ class OpsHub:
         kind = message.get("type")
         if kind == "hello":
             self.task_protocol = message.get("taskProtocol") == "legacy-task-v1"
-            self.key_protocol = ws.url.scheme == "wss" and message.get("keyProtocol") == KEY_PROTOCOL
+            self.key_protocol = (ws.url.scheme == "wss" or (self.allow_plain_ws and ws.url.scheme == "ws")) \
+                and message.get("keyProtocol") == KEY_PROTOCOL
         if kind in ("hello", "telemetry"):
             self.telemetry = message
         elif kind == "result":
@@ -218,7 +221,10 @@ async def result_data(hub: OpsHub, name: str, params: dict[str, Any] | None = No
 def create_app(
     device_token: str | None = None, admin_token: str | None = None, *,
     tasks_enabled: bool = False, task_device_ip: str | None = None, key_rotation_enabled: bool = False,
+    key_rotation_plain_ws: bool = False,
 ):
+    if key_rotation_plain_ws and not key_rotation_enabled:
+        raise ValueError("plaintext rotation requires key rotation")
     if key_rotation_enabled and (not tasks_enabled or not task_device_ip):
         raise ValueError("key rotation requires restricted local task mode")
     device_token = device_token if device_token is not None else os.environ.get("OPS_DEVICE_TOKEN", "")
@@ -226,6 +232,7 @@ def create_app(
     if key_rotation_enabled and (not device_token or not admin_token or device_token == admin_token):
         raise ValueError("key rotation requires distinct device and administrator tokens")
     hub = OpsHub()
+    hub.allow_plain_ws = key_rotation_plain_ws
     rotation_lock = asyncio.Lock()
 
     @asynccontextmanager
@@ -251,7 +258,7 @@ def create_app(
     @app.websocket("/ws/device")
     async def device(ws: WebSocket, authorization: str = Header(default="")):
         expected = "Bearer " + device_token
-        if (key_rotation_enabled and ws.url.scheme != "wss") or (
+        if (key_rotation_enabled and ws.url.scheme != "wss" and not key_rotation_plain_ws) or (
             task_device_ip and (ws.client is None or ws.client.host != task_device_ip)
         ) or (
             not device_token or not secrets.compare_digest(authorization.encode(), expected.encode())
@@ -281,8 +288,8 @@ def create_app(
         response.headers["Cache-Control"] = "no-store"
         if not key_rotation_enabled:
             raise HTTPException(404, "key rotation disabled")
-        if request.url.scheme != "https":
-            raise HTTPException(403, "key rotation requires direct TLS")
+        if request.url.scheme != "https" and not key_rotation_plain_ws:
+            raise HTTPException(403, "key rotation requires direct TLS or the explicit plaintext LAN opt-in")
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
             raise HTTPException(415, "expected JSON")
         body = bytearray()
@@ -371,10 +378,13 @@ def main():
         raise SystemExit("set distinct OPS_DEVICE_TOKEN and OPS_ADMIN_TOKEN")
     host, port = os.environ.get("OPS_HOST", "127.0.0.1"), int(os.environ.get("OPS_PORT", "8787"))
     rotate = os.environ.get("OPS_KEY_ROTATION_ENABLED") == "1"
+    rotate_plain = os.environ.get("OPS_KEY_ROTATION_PLAIN_WS") == "1"
     cert, key = os.environ.get("OPS_TLS_CERT"), os.environ.get("OPS_TLS_KEY")
     tasks = os.environ.get("OPS_TASKS_ENABLED") == "1"
-    if bool(cert) != bool(key) or (rotate and (not tasks or not cert or not key)):
+    if bool(cert) != bool(key) or (rotate and not rotate_plain and (not tasks or not cert or not key)):
         raise SystemExit("key rotation requires restricted task mode and a direct TLS certificate/key pair")
+    if rotate_plain and not tasks:
+        raise SystemExit("plaintext key rotation requires restricted task mode")
     tls = {"ssl_certfile": cert, "ssl_keyfile": key}
     if not tasks:
         uvicorn.run(app, host=host, port=port, proxy_headers=False, **tls)
@@ -388,7 +398,8 @@ def main():
     if not any(lan in net and phone in net for net in private_lans) or lan == phone or port != 3233:
         raise SystemExit("task mode requires distinct private LAN addresses and OPS_PORT=3233")
     server = uvicorn.Server(uvicorn.Config(
-        create_app(device, admin, tasks_enabled=True, task_device_ip=str(phone), key_rotation_enabled=rotate),
+        create_app(device, admin, tasks_enabled=True, task_device_ip=str(phone), key_rotation_enabled=rotate,
+                   key_rotation_plain_ws=rotate_plain),
         proxy_headers=False, access_log=False, ws_max_size=4_000_000, **tls,
     ))
     with socket.socket() as local, socket.socket() as lan_socket:

@@ -107,6 +107,42 @@ def test_rotation_rejects_overlap_and_reports_disconnect_without_retry():
             assert c.post(PATH, headers=ADMIN, json=BODY).status_code == 409
 
 
+def test_plaintext_lan_rotation_needs_explicit_opt_in():
+    with pytest.raises(ValueError):
+        app(key_rotation_plain_ws=True)
+    target = app(tasks_enabled=True, task_device_ip="127.0.0.1", key_rotation_enabled=True,
+                 key_rotation_plain_ws=True)
+    with TestClient(target, base_url="http://testserver", client=("127.0.0.1", 50000)) as c:
+        with c.websocket_connect("ws://testserver/ws/device", headers=DEVICE) as ws:
+            ws.send_json({"type": "hello", "keyProtocol": "model-key-v1"})
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(c.post, PATH, headers=ADMIN, json=BODY)
+                cmd = ws.receive_json()
+                assert (cmd["name"], cmd["params"]) == ("model.key.rotate", BODY)
+                ws.send_json({"type": "result", "id": cmd["id"], "ok": True,
+                              "data": {"updated": True, "apiKey": KEY}})
+                r = pending.result(timeout=5)
+            assert r.status_code == 200 and r.json() == {"ok": True, "data": {"updated": True}}
+            status = c.get("/api/status", headers=ADMIN)
+            assert status.json()["model_key_rotation_supported"] is True
+            assert KEY not in status.text
+
+
+def test_plaintext_rotation_still_rejects_other_hosts_and_missing_hello():
+    target = app(tasks_enabled=True, task_device_ip="192.168.3.16", key_rotation_enabled=True,
+                 key_rotation_plain_ws=True)
+    with TestClient(target, base_url="http://testserver", client=("192.168.3.18", 50000)) as c:
+        assert c.post(PATH, headers={**ADMIN, "X-Forwarded-For": "127.0.0.1"}, json=BODY).status_code == 403
+        with pytest.raises(WebSocketDisconnect):
+            with c.websocket_connect("ws://testserver/ws/device", headers=DEVICE):
+                pytest.fail("device from another host accepted")
+    # Administration stays on loopback in task mode, even with plaintext rotation enabled.
+    with TestClient(target, base_url="http://testserver", client=("192.168.3.16", 50000)) as c:
+        with c.websocket_connect("ws://testserver/ws/device", headers=DEVICE) as ws:
+            ws.send_json({"type": "hello", "taskProtocol": "legacy-task-v1"})
+            assert c.post(PATH, headers=ADMIN, json=BODY).status_code == 403
+
+
 def test_key_file_refuses_wrong_permissions_and_symlinks(tmp_path):
     p = tmp_path / "key"
     p.write_text(KEY + "\n")

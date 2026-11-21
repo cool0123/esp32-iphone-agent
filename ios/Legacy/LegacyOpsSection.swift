@@ -10,8 +10,12 @@ struct LegacyOpsSection: View {
                 .autocapitalization(.none).disableAutocorrection(true)
             Toggle("启用远程运维", isOn: $ops.enabled)
             Toggle("允许台机下发任务", isOn: $ops.acceptsTasks).disabled(!ops.enabled)
-            Toggle("允许运维更换模型 API Key（仅 HTTPS）", isOn: $ops.allowsKeyRotation)
-                .disabled(!ops.enabled || !ops.secureEndpoint)
+            Toggle("允许运维更换模型 API Key", isOn: $ops.allowsKeyRotation)
+                .disabled(!ops.enabled || !ops.rotateAllowedTransport)
+            if !ops.secureEndpoint && ops.rotateAllowedTransport {
+                Text("当前为明文局域网换钥；换用 HTTPS 运维地址更稳妥。")
+                    .font(.footnote)
+            }
             Button("重新连接运维服务") { ops.start() }.disabled(!ops.enabled)
             Text(ops.state)
             Text("换密钥授权会保留；更改运维地址或令牌后需要重新开启。电脑不能读取密钥。")
