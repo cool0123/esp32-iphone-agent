@@ -115,6 +115,16 @@ import XCTest
         XCTAssertEqual(try OpsConfig.validated(["model": "vision-model"]), ["model": "vision-model"])
     }
 
+    func testCaptureSizeIsBoundedAndParsed() {
+        XCTAssertEqual(OpsConfig.captureSize("414x736")?.0, 414)
+        XCTAssertEqual(OpsConfig.captureSize("414X736")?.1, 736)
+        for bad in ["", "414", "414x", "x736", "159x736", "414x2561", "414,736", "0x0", "a x b"] {
+            XCTAssertNil(OpsConfig.captureSize(bad), bad)
+        }
+        XCTAssertThrowsError(try OpsConfig.validated(["captureSize": "10x10"]))
+        XCTAssertEqual(try OpsConfig.validated(["captureSize": "414x736"]), ["captureSize": "414x736"])
+    }
+
     func testConfigContainsOnlyNonSecretFields() {
         let settings = Settings(defaults: UserDefaults(suiteName: UUID().uuidString)!, info: nil)
         settings.baseURL = "https://user:pass@example.com/v1?key=remote-secret"

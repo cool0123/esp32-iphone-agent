@@ -12,6 +12,14 @@ import UIKit
     func setFrameMode(_ mode: FrameMode)
     func say(_ text: String)
     func stopAgent() async
+    /// Mirrored capture size, so the operator can trade frame size against how readable labels are.
+    func setCaptureSize(width: Int, height: Int) async throws
+}
+
+extension OpsApp {
+    func setCaptureSize(width: Int, height: Int) async throws {
+        throw DeviceError(message: "capture size is not adjustable on this build")
+    }
 }
 
 /// Optional task capability; the modern App does not advertise or accept this protocol yet.
@@ -85,7 +93,7 @@ extension AppModel: OpsApp {
 /// Remote-management config whitelist. Model credentials and the management token are never included.
 @MainActor enum OpsConfig {
     static let keys: Set<String> = ["baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody",
-                                    "agentName", "frameMode"]
+                                    "agentName", "frameMode", "captureSize"]
 
     static func get(_ app: any OpsApp) -> [String: Any] { get(app.settings, frameMode: FrameMode.current) }
 
@@ -118,6 +126,10 @@ extension AppModel: OpsApp {
                 }
             case "frameMode":
                 guard ["stream", "snap"].contains(value) else { throw DeviceError(message: "invalid frameMode") }
+            case "captureSize":
+                guard let size = Self.captureSize(value) else {
+                    throw DeviceError(message: "captureSize must be WIDTHxHEIGHT between 160 and 1920/2560")
+                }
             case "tokenParam":
                 guard !value.isEmpty, value.count <= 40 else { throw DeviceError(message: "invalid tokenParam") }
             case "extraBody":
@@ -135,7 +147,15 @@ extension AppModel: OpsApp {
         return patch
     }
 
-    static func apply(_ params: [String: Any], to app: any OpsApp) throws -> [String: Any] {
+    /// "WIDTHxHEIGHT" for the mirrored capture, bounded like the firmware's own `res` command.
+    static func captureSize(_ value: String) -> (Int, Int)? {
+        let parts = value.lowercased().split(separator: "x")
+        guard parts.count == 2, let w = Int(parts[0]), let h = Int(parts[1]),
+              (160...1920).contains(w), (160...2560).contains(h) else { return nil }
+        return (w, h)
+    }
+
+    static func apply(_ params: [String: Any], to app: any OpsApp) async throws -> [String: Any] {
         let patch = try validated(params)
         let s = app.settings
         if let v = patch["baseURL"] { s.baseURL = v }
@@ -146,6 +166,9 @@ extension AppModel: OpsApp {
         if let v = patch["extraBody"] { s.extraBody = v }
         if let v = patch["agentName"] { s.agentName = v }
         if let v = patch["frameMode"] { app.setFrameMode(FrameMode(rawValue: v) ?? .stream) }
+        if let v = patch["captureSize"], let size = Self.captureSize(v) {
+            try await app.setCaptureSize(width: size.0, height: size.1)
+        }
         app.say("remote config updated: " + patch.keys.sorted().joined(separator: ", "))
         return get(app)
     }
@@ -424,7 +447,7 @@ extension AppModel: OpsApp {
                 } else { data = try tasks.opsTaskStatus(id: request.id) }
             case "status": data = telemetry()
             case "config.get": data = OpsConfig.get(app)
-            case "config.set": data = try OpsConfig.apply(params, to: app)
+            case "config.set": data = try await OpsConfig.apply(params, to: app)
             case "logs.get": data = ["lines": DebugLog.tail(min(params["lines"] as? Int ?? 100, 200))]
             case "snapshot":
                 guard app.feed.live, let jpeg = app.feed.frame else { throw DeviceError(message: "no fresh screenshot available") }

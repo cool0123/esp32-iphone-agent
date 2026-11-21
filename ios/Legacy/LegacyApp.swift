@@ -103,6 +103,12 @@ enum Mood: String, Codable, Hashable {
         if ops.enabled { ops.start() }
     }
     func say(_ text: String) { message = text; DebugLog.write(text) }
+    func setCaptureSize(width: Int, height: Int) async throws {
+        guard board.connected else { throw DeviceError(message: "board not connected") }
+        _ = try await board.commands.send("res \(width) \(height)")
+        say("镜像分辨率已设为 \(width)×\(height)。")
+    }
+
     func setFrameMode(_ mode: FrameMode) {
         FrameMode.current = mode
         Task { do { try await receiveMirror(mode == .stream) } catch { say(error.localizedDescription) } }
