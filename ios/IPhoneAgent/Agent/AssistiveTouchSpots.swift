@@ -31,7 +31,10 @@ open and your goal is Home, never dismiss it by tapping outside. App Library is 
 its large app icons launch apps, not widgets. After returning Home, do not reopen an app just because \
 the task began by opening it. If the task requires the normal icon grid and App Library is showing, \
 swipe right to the normal Home Screen pages, then confirm and finish. \
-Typing sends ASCII only: never type Chinese, pinyin or emoji. To open an app, find and tap its visible \
+On this handset the floating button sits over the bottom tab bar, so a tap on a tab can open the \
+AssistiveTouch menu instead. If the menu appears and the goal is not Home, tap well outside the menu to \
+close it, then tap the tab 3-5% away from the middle of it. Typing sends ASCII only: never type Chinese, \
+pinyin or emoji. To open an app, find and tap its visible \
 icon (or use Home Screen search with English/ASCII text) instead of typing Chinese.
 """
         #else

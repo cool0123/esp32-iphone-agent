@@ -123,6 +123,17 @@ import XCTest
         XCTAssertTrue(agent.repeating(swipe))
     }
 
+    func testDeadTapIsAvoidedOnTheNextAttempt() {
+        let pand = CGPoint(x: 0.62, y: 0.95)
+        XCTAssertNil(AgentLoop.avoidDeadTap(pand, []))
+        XCTAssertNil(AgentLoop.avoidDeadTap(CGPoint(x: 0.2, y: 0.2), [pand]))
+        let shifted = try! XCTUnwrap(AgentLoop.avoidDeadTap(pand, [pand]))
+        XCTAssertGreaterThan(abs(shifted.x - pand.x) + abs(shifted.y - pand.y), 0.03)
+        // Repeated failures walk around the target instead of retrying the same point.
+        let second = try! XCTUnwrap(AgentLoop.avoidDeadTap(pand, [pand, pand]))
+        XCTAssertNotEqual(shifted, second)
+    }
+
     func testSameDirectionSwipeIsTheSameMoveDespiteJitter() {
         let a: JObject = ["action": .str("swipe"), "x1": .int(200), "y1": .int(500), "x2": .int(800), "y2": .int(500)]
         for y in [450, 600, 700] {

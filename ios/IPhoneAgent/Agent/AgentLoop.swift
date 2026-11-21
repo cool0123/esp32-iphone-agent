@@ -92,6 +92,9 @@ extension Pointer: Gestures {}
     @Published private(set) var running = false
     private var pointerAt = CGPoint.zero  // last pointer position (screen fractions)
     private var discards = 0  // consecutive proposals rejected because the frame moved on
+    /// Tap targets that changed nothing (typically the AssistiveTouch floating button, which sits over the tab
+    /// bar). Remembered as screen fractions so later taps land beside them instead of being swallowed again.
+    private var deadTaps: [CGPoint] = []
     /// When the last gesture ended: the model never decides on a frame from before it.
     private(set) var lastActed = 0.0
     /// Awaited before every look and every gesture (the app holds the run while its own UI is in front).
@@ -354,8 +357,17 @@ extension Pointer: Gestures {}
             record(planned.shot, act)
             return true
         }
+        // A target that already swallowed a tap gets nudged aside, so a floating button cannot eat every attempt.
+        var act = act
+        var nudged = false
+        if name == "tap" || name == "click", let target = tapPoint(act), let shifted = Self.avoidDeadTap(target, deadTaps) {
+            act["x"] = .int(Int((shifted.x * 1000).rounded()))
+            act["y"] = .int(Int((shifted.y * 1000).rounded()))
+            nudged = true  // the same step, one point beside a target that swallowed the previous tap
+        }
         // Execute at most one action per observation. Typing and Enter require their own fresh view.
         var step = act
+        if nudged { step["nudged"] = .bool(true) }
         var spots = [pointerAt]
         onDoing?(.acting(act))
         let started = now()
@@ -369,9 +381,35 @@ extension Pointer: Gestures {}
         record(seen, step)
         timing.frameMs += await settle()
         if screen.live, screen.capturedAt > lastActed {
-            steps[steps.count - 1]["changed"] = .bool(Vision.changed(seen, screen.frame, ignore: spots))
+            let changed = Vision.changed(seen, screen.frame, ignore: spots)
+            steps[steps.count - 1]["changed"] = .bool(changed)
+            if name == "tap" || name == "click", let target = tapPoint(step) {
+                if changed { deadTaps.removeAll() } else { rememberDeadTap(target) }
+            }
         }
         return false
+    }
+
+    /// Screen fraction of a tap/click target, in model grid units.
+    private func tapPoint(_ act: JObject) -> CGPoint? {
+        guard let x = act["x"]?.double, let y = act["y"]?.double, x.isFinite, y.isFinite else { return nil }
+        return CGPoint(x: min(max(x / 1000, 0), 1), y: min(max(y / 1000, 0), 1))
+    }
+
+    private func rememberDeadTap(_ p: CGPoint) {
+        deadTaps.removeAll { abs($0.x - p.x) < 0.04 && abs($0.y - p.y) < 0.04 }
+        deadTaps.append(p)
+        if deadTaps.count > 4 { deadTaps.removeFirst() }
+        DebugLog.write(String(format: "tap at (%.3f, %.3f) changed nothing; will tap beside it", p.x, p.y))
+    }
+
+    /// Moves a tap beside a spot that has already swallowed one, cycling offsets so retries explore the target.
+    static func avoidDeadTap(_ p: CGPoint, _ dead: [CGPoint], offsets: [CGPoint] = [CGPoint(x: 0.045, y: 0),
+                         CGPoint(x: -0.045, y: 0), CGPoint(x: 0, y: -0.05), CGPoint(x: 0, y: 0.05)]) -> CGPoint? {
+        let near = dead.filter { abs($0.x - p.x) < 0.04 && abs($0.y - p.y) < 0.04 }
+        guard !near.isEmpty else { return nil }
+        let offset = offsets[min(near.count, offsets.count - 1) % offsets.count]
+        return CGPoint(x: min(max(p.x + offset.x, 0.01), 0.99), y: min(max(p.y + offset.y, 0.01), 0.99))
     }
 
     /// Records a discarded proposal and re-plans once the same frame keeps being rejected, instead of burning
