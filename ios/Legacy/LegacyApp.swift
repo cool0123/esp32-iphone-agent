@@ -187,13 +187,17 @@ enum Mood: String, Codable, Hashable {
         return data
     }
 
-    /// The run is bound to the board link (pointer state) but not to one video generation: a decoder restart
-    /// while the task is running must not cancel it. Every input still requires a fresh live frame.
+    /// What must stay true for an accepted task to keep running: the app is in the background, the operator still
+    /// allows tasks, the deadline has not passed and the board link is the one the pointer state belongs to.
+    ///
+    /// A momentary loss of video or USB input does not cancel the task: the agent waits for a fresh frame before
+    /// acting (AgentLoop.waitForScreen) and never acts blind, so pausing is both safer and more useful than
+    /// throwing away a half-finished run.
     private func checkRemoteInput(_ run: RemoteRun) throws {
         guard UIApplication.shared.applicationState == .background, ops.enabled, ops.acceptsTasks,
-              ProcessInfo.processInfo.systemUptime < run.deadline, remoteBoardReady,
+              ProcessInfo.processInfo.systemUptime < run.deadline,
               board.commands.links == run.link else {
-            throw BlindError(reason: "remote task lost its live board, permission, or exceeded its deadline")
+            throw BlindError(reason: "remote task lost its board link, permission, or exceeded its deadline")
         }
     }
 
