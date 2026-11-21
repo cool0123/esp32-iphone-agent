@@ -1,0 +1,17 @@
+name: Firmware host tests
+
+# The pure-C parts (GOP buffer, monitor windows, event channel) are checked on the host with ASan/UBSan.
+# This workflow exists because these tests cannot run on a machine without a C toolchain.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "hardware/**"
+      - ".github/workflows/firmware-tests.yml"
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host unit tests (ASan/UBSan)
+        run: make -C hardware/tests
