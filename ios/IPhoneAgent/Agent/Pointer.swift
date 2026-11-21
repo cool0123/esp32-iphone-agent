@@ -162,13 +162,20 @@ import Foundation
     }
 
     /// Closed loop: find the real pointer on screen, fix a miss, and learn the error for later moves.
+    ///
+    /// A pointer that cannot be seen in the pixels (small frame, translucent spot, still screen) must not cancel
+    /// the tap: the calibrated move already put the pointer at the target, and the agent sees the result in the
+    /// next frame. Only a measured error beyond the correction budget skips the correction, never the tap.
     private func aim(_ x: Double, _ y: Double) async throws {
         guard let span, let found = try await measure(x, y, model: false) else {
-            throw DeviceError(message: "precise tap cancelled: pointer not found")
+            log("aim: pointer not visible; using the calibrated position")
+            return
         }
         let fx = Double(found.x), fy = Double(found.y)
         guard max(abs(fx - x), abs(fy - y)) <= Self.maxMiss else {
-            throw DeviceError(message: "precise tap cancelled: pointer position is inconsistent")
+            log(String(format: "aim: measured miss %.3f / %.3f beyond the correction budget; tapping the calibrated point",
+                       fx - x, fy - y))
+            return
         }
         remember("x", (fix(x, "x"), fx))
         remember("y", (fix(y, "y"), fy))

@@ -118,7 +118,7 @@ extension Pointer: Gestures {}
     enum HelpChoice { case resume, skip, stop }
 
     init(phone: Gestures?, screen: ScreenSource?, actor: ChatModel?, planner: ChatModel?, trace: TraceStore?,
-         maxSteps: Int = 40, maxFailures: Int = 3) {
+         maxSteps: Int = 40, maxFailures: Int = 6) {
         self.phone = phone; self.screen = screen; self.actor = actor; self.planner = planner
         self.trace = trace; self.maxSteps = maxSteps; self.maxFailures = maxFailures
     }

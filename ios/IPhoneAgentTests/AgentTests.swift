@@ -215,12 +215,12 @@ import XCTest
         XCTAssertTrue(source.contains("ACTOR_PROMPT = \"\"\"" + Prompts.actorServer + "\"\"\""))
     }
 
-    func testRunStopsAfterThreeErrorsInARow() async {
+    func testRunStopsAfterRepeatedErrors() async {
         let model = FakeModel { n in n == 1 ? "1. do it" : "no action here" }
         let agent = AgentLoop(phone: FakeGestures(), screen: FakeScreen(), actor: model, planner: model, trace: nil)
         await agent.run()
         XCTAssertEqual(agent.steps.last?["action"], .str("fail"))
-        XCTAssertEqual(agent.steps.last?["reason"], .str("3 errors in a row"))
+        XCTAssertEqual(agent.steps.last?["reason"], .str("6 errors in a row"))
     }
 
     func testDelayedActorDecisionIsDiscardedBeforeAnyGesture() async throws {

@@ -30,7 +30,9 @@ AssistiveTouch floating button, then on the next screenshot tap 主屏幕 (Home)
 open and your goal is Home, never dismiss it by tapping outside. App Library is a Home Screen page: \
 its large app icons launch apps, not widgets. After returning Home, do not reopen an app just because \
 the task began by opening it. If the task requires the normal icon grid and App Library is showing, \
-swipe right to the normal Home Screen pages, then confirm and finish.
+swipe right to the normal Home Screen pages, then confirm and finish. \
+Typing sends ASCII only: never type Chinese, pinyin or emoji. To open an app, find and tap its visible \
+icon (or use Home Screen search with English/ASCII text) instead of typing Chinese.
 """
         #else
         var text = """
