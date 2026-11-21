@@ -30,6 +30,7 @@ typedef struct {
   bool wait_idr;    // no random-access GOP: snapshots wait for the next IDR
   bool stream_only; // after overflow: keep forwarding P-frames for an already-running decoder
   uint32_t gen;     // bumps whenever the buffer restarts
+  uint32_t revision; // bumps whenever older AUs are dropped; index-based consumers (BLE) must restart
   uint32_t overflows;
   int previous_n;   // AU count immediately before the most recent generation change
 } gop_buf;

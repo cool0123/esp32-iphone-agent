@@ -14,7 +14,7 @@ void gop_init(gop_buf *g, uint8_t *arena, size_t cap, gop_au *aus, int max) {
 void gop_set_config(gop_buf *g, const uint8_t *annexb, size_t len, uint32_t ts) {
   // Configuration belongs to a new reference chain; never pair it with the old GOP.
   g->previous_n = g->n;
-  g->used = 0; g->n = 0; g->gen++;
+  g->used = 0; g->n = 0; g->gen++; g->revision++;
   g->wait_idr = true; g->stream_only = false;
   if (len > GOP_CFG_MAX) len = 0;  // never seen in practice; treat as missing
   memcpy(g->cfg, annexb, len);
@@ -27,6 +27,23 @@ static void restart(gop_buf *g) {
   g->used = 0;
   g->n = 0;
   g->gen++;
+  g->revision++;
+}
+
+/// Drops the oldest `count` access units and rebases the rest, so the retained bytes stay at the end of the
+/// arena. The monitor maps its ring as `ring.end - used`, which stays correct because only a prefix is removed.
+static void drop_prefix(gop_buf *g, int count) {
+  if (count <= 0 || count >= g->n) return;
+  uint32_t shift = g->aus[count].off;
+  if (!shift) return;
+  memmove(g->arena, g->arena + shift, g->used - shift);
+  for (int i = count; i < g->n; i++) {
+    g->aus[i - count] = g->aus[i];
+    g->aus[i - count].off -= shift;
+  }
+  g->n -= count;
+  g->used -= shift;
+  g->revision++;  // AU indices moved: index-based consumers cannot continue where they were
 }
 
 int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t ts) {
@@ -38,11 +55,20 @@ int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t t
     return -1;  // before the first IDR there is nothing a live decoder can continue from
   }
   if (g->used + len > g->cap || g->n == g->max) {
-    // A fresh decoder needs an IDR, but a running one already has the reference frames. Keep the
-    // live stream moving instead of rebooting the board and losing AirPlay; snapshots still wait.
-    restart(g);
-    g->wait_idr = true;
-    g->stream_only = true;
+    // Keep the newest AUs instead of wiping the history: an overflow must not destroy a running
+    // subscriber's byte cursor, because a cold start needs an IDR that iOS 15 only sends when the mirror
+    // session restarts. The retained head is no longer an IDR, so snapshots and cold clients still wait
+    // for one; only a subscriber that is already decoding continues.
+    int drop = 0;
+    while (drop < g->n && (g->used - g->aus[drop].off + len > g->cap || g->n - drop + 1 > g->max)) drop++;
+    bool fits = drop < g->n && g->used - g->aus[drop].off + len <= g->cap && g->n - drop + 1 <= g->max;
+    if (fits) drop_prefix(g, drop);
+    g->previous_n = g->n;
+    if (!fits) restart(g);  // a single AU larger than the whole arena: nothing can be kept
+    if (!idr) {
+      g->wait_idr = true;
+      g->stream_only = true;
+    }
     g->overflows++;
   }
   memcpy(g->arena + g->used, annexb, len);

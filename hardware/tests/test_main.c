@@ -241,10 +241,12 @@ static void test_gop(void) {
   CHECK(gop_push(&g, au, 30, true, 2) == 0);
   CHECK(gop_push(&g, au, 30, false, 3) == 1);
   CHECK(gop_push(&g, au, 30, false, 4) == 2 && g.used == 90);
-  CHECK(gop_push(&g, au, 30, false, 5) == 0 && g.n == 1 && g.used == 30);
+  // Overflow keeps the newest AUs and rebases them: a running subscriber's byte cursor stays valid.
+  CHECK(gop_push(&g, au, 30, false, 5) == 2 && g.n == 3 && g.used == 90);
   CHECK(g.wait_idr && g.stream_only && g.overflows == 1);  // live P-frames continue, snapshots wait
-  CHECK(gop_push(&g, au, 10, false, 6) == 1);
-  CHECK(gop_push(&g, au, 10, true, 7) == 0 && !g.wait_idr && !g.stream_only);
+  CHECK(g.aus[0].off == 0 && g.aus[2].off == 60);
+  CHECK(gop_push(&g, au, 10, false, 6) == 3 && g.used == 100);
+  CHECK(gop_push(&g, au, 10, true, 7) == 0 && g.n == 1 && !g.wait_idr && !g.stream_only);
 
   uint8_t idr[] = {0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x65, 9};
   CHECK(annexb_has_idr(idr, sizeof idr));
@@ -271,19 +273,15 @@ static void test_gop_continuation(void) {
   int caught_up = g.n;
   CHECK(!gop_can_continue(&g, gen, caught_up));
   // The sender caught up once, but a tail AU arrives before the overflow. That tail cannot be lost.
+  uint32_t revision = g.revision;
   gop_push(&g, au, 30, false, 3);
   gop_push(&g, au, 30, false, 4);
-  CHECK(g.previous_n == 3 && g.n == 1);
+  // The overflow keeps the newest AUs for the byte-addressed LAN reader instead of wiping the history.
+  CHECK(g.n == 3 && g.used == 90 && g.overflows == 1);
+  CHECK(g.wait_idr && g.stream_only && !gop_view_open(&g, &view));  // retained head is a P frame
+  CHECK(g.revision != revision);            // index-based consumers (BLE) must restart
+  CHECK(g.gen == gen);                      // the byte stream itself did not restart
   CHECK(!gop_can_continue(&g, gen, caught_up));
-  CHECK(!gop_can_continue(&g, UINT32_MAX, 3));  // new subscription / failed chunk
-  CHECK(gop_can_continue(&g, gen, 3));        // includes a final AU copied before the overflow
-  CHECK(!gop_view_open(&g, &view));           // P-only history is never a snapshot
-  uint32_t first_overflow_gen = g.gen;
-  gop_push(&g, au, 30, false, 5);
-  gop_push(&g, au, 30, false, 6);
-  gop_push(&g, au, 30, false, 7);
-  CHECK(!gop_can_continue(&g, gen, 3));       // missed a whole generation, despite equal AU counts
-  CHECK(gop_can_continue(&g, first_overflow_gen, 3));
   gop_push(&g, au, 30, true, 8);
   CHECK(!gop_can_continue(&g, g.gen - 1, g.previous_n));  // a new IDR starts with CONFIG
   CHECK(gop_view_open(&g, &view));
@@ -291,11 +289,10 @@ static void test_gop_continuation(void) {
   // Metadata exhaustion is an overflow even when the byte arena still has room.
   gop_init(&g, arena, sizeof arena, aus, 2);
   gop_push(&g, au, 5, true, 9);
-  gen = g.gen;
   gop_push(&g, au, 5, false, 10);
   gop_push(&g, au, 5, false, 11);
-  CHECK(g.used == 5 && g.previous_n == 2 && gop_can_continue(&g, gen, 2));
-  CHECK(!gop_can_continue(&g, gen, 1));
+  CHECK(g.used == 10 && g.n == 2 && g.overflows == 1 && g.wait_idr);
+  CHECK(!gop_view_open(&g, &view));
 }
 
 static void test_chunker(void) {

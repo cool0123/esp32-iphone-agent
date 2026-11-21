@@ -26,7 +26,11 @@ struct Req {
 static gop_buf gop;
 static video_ring monitorRing;
 static uint32_t monitorEpoch, monitorAt;
-const size_t MONITOR_RING_CAP = 1024 * 1024;
+// A live subscriber is served from this ring, so it holds the decoder's continuity window. At ~135 KB per
+// access unit and 5 fps (675 KB/s) the old 1 MB covered only ~1.5 s: any hiccup longer than that fell out of
+// the window, forced a cold start, and a cold start needs an IDR that this iOS 15 only sends when the mirror
+// session restarts. 3 MB gives ~4 s of headroom; the fallbacks keep video working if PSRAM is tight.
+const size_t MONITOR_RING_CAPS[] = {3 * 1024 * 1024, 2 * 1024 * 1024, 1024 * 1024};
 static SemaphoreHandle_t lock;
 static uint8_t *scratch;
 static QueueHandle_t reqs;
@@ -131,6 +135,7 @@ static String doBench(uint32_t kb) {
 // send, start over from the GOP's IDR.
 static void streamStep() {
   static uint32_t txGen = UINT32_MAX;
+  static uint32_t sentRevision = UINT32_MAX;
   static uint32_t subscriberEpoch, txEpoch;
   static int next;
   static gop_recovery recovery;
@@ -147,11 +152,12 @@ static void streamStep() {
     recovery = {};
     return;
   }
-  uint32_t gen, cfg_ts;
+  uint32_t gen, cfg_ts, revision;
   size_t cfg_len;
   int n;
   xSemaphoreTake(lock, portMAX_DELAY);
   gen = gop.gen;
+  revision = gop.revision;
   n = gop.wait_idr && !gop.stream_only ? 0 : gop.n;
   cfg_len = gop.cfg_len;
   cfg_ts = gop.cfg_ts;
@@ -161,6 +167,8 @@ static void streamStep() {
                        (txGen == UINT32_MAX && gop.used > SNAP_MAX_BYTES);
   memcpy(cfg, gop.cfg, cfg_len);
   xSemaphoreGive(lock);
+  // Dropping old AUs rebases every index: the BLE sender must start over (it needs a new IDR anyway).
+  if (revision != sentRevision) { sentRevision = revision; txGen = UINT32_MAX; }
   if (gop_recovery_due(&recovery, gen, epoch, millis(), needsKeyframe)) airplay_request_keyframe();
   if (!n || !cfg_len) return;
   if (gen != txGen) {
@@ -210,8 +218,13 @@ bool video_begin() {
     return false;
   }
   gop_init(&gop, arena, GOP_CAP, aus, MAX_AUS);
-  uint8_t *monitorArena = (uint8_t *)heap_caps_malloc(MONITOR_RING_CAP, MALLOC_CAP_SPIRAM);
-  video_ring_init(&monitorRing, monitorArena, monitorArena ? MONITOR_RING_CAP : 0);
+  uint8_t *monitorArena = NULL;
+  size_t monitorCap = 0;
+  for (size_t cap : MONITOR_RING_CAPS) {
+    monitorArena = (uint8_t *)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (monitorArena) { monitorCap = cap; break; }
+  }
+  video_ring_init(&monitorRing, monitorArena, monitorCap);
   monitorEpoch = esp_random();
   lock = xSemaphoreCreateMutex();
   reqs = xQueueCreate(4, sizeof(Req));

@@ -316,6 +316,14 @@ assertions. To reduce current peaks, BLE default TX was separately lowered from 
 measurements around -24..-35 dBm; `ble.tx` reads the controller value. This does not establish electrical root
 cause or long-term supply stability. Cold/P-only recovery remains unresolved.
 
+### Overflow policy (unreleased board build)
+
+The board retains the newest access units on GTP capacity exhaustion instead of wiping the GOP: a running
+LAN subscriber keeps its byte cursor, so an overflow no longer interrupts live video, and only a cold start
+(the retained head is not an IDR) still waits for a keyframe. Index-based BLE consumers restart because AU
+indices move. The live continuation ring grew from 1 MB to 3 MB with 2 MB / 1 MB fallbacks, because at
+~135 KB per access unit and 5 fps the old ring covered only ~1.5 s of history.
+
 The disabled-event/0 dBm build **is installed**: board version `Nov  1 2026 06:00:25`, SHA256
 `65ae568d612bc5c7f8d8ae3383c64c52242bd99589932872a25c8e20ac92a526`, runtime `enabled=false,ble.tx=0` and no TCP
 7013 listener. That OTA nevertheless raised `bo:19→20`. Subsequent phone RSSI was around -33..-44 dBm.
