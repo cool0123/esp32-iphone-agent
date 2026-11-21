@@ -11,7 +11,7 @@
 // GOP since the latest IDR. On overflow the oldest AUs are dropped and the newest kept, so a running LAN
 // subscriber keeps its byte cursor (a cold start still needs the next IDR).
 // PSRAM budget: AirPlay needs ~2.5 MB of the 8 MB, so the video buffers stay at ~5.5 MB total.
-const size_t GOP_CAP = 3584 * 1024;
+const size_t GOP_CAP = 4 * 1024 * 1024;
 const int MAX_AUS = 8192;
 // A snapshot resends the whole GOP over BLE; past this it cannot arrive before any sane client gives up.
 const size_t SNAP_MAX_BYTES = 800 * 1024;
@@ -31,7 +31,7 @@ static uint32_t monitorEpoch, monitorAt;
 // access unit and 5 fps (675 KB/s) the old 1 MB covered only ~1.5 s: any hiccup longer than that fell out of
 // the window, forced a cold start, and a cold start needs an IDR that this iOS 15 only sends when the mirror
 // session restarts. 1.5 MB gives ~2.2 s of headroom; the fallbacks keep video working if PSRAM is tight.
-const size_t MONITOR_RING_CAPS[] = {1536 * 1024, 1024 * 1024, 768 * 1024};
+const size_t MONITOR_RING_CAPS[] = {1024 * 1024};
 static SemaphoreHandle_t lock;
 static uint8_t *scratch;
 static QueueHandle_t reqs;
