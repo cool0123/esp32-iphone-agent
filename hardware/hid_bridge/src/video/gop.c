@@ -54,14 +54,18 @@ int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t t
   } else if (g->wait_idr && !g->stream_only) {
     return -1;  // before the first IDR there is nothing a live decoder can continue from
   }
-  if (g->used + len > g->cap || g->n == g->max) {
+  // Without an IDR in the buffer nothing can start decoding from it, so the history only serves clients that
+  // are already running: a much smaller window is enough and keeps the rebase copy cheap.
+  size_t cap = g->wait_idr ? (1 * 1024 * 1024) : g->cap;
+  if (g->used + len > cap || g->n == g->max) {
     // Keep the newest AUs instead of wiping the history: an overflow must not destroy a running
     // subscriber's byte cursor, because a cold start needs an IDR that iOS 15 only sends when the mirror
     // session restarts. The retained head is no longer an IDR, so snapshots and cold clients still wait
     // for one; only a subscriber that is already decoding continues.
+    bool had_idr = g->n > 0 && g->aus[0].idr;
     int drop = 0;
-    while (drop < g->n && (g->used - g->aus[drop].off + len > g->cap || g->n - drop + 1 > g->max)) drop++;
-    bool fits = drop < g->n && g->used - g->aus[drop].off + len <= g->cap && g->n - drop + 1 <= g->max;
+    while (drop < g->n && (g->used - g->aus[drop].off + len > cap || g->n - drop + 1 > g->max)) drop++;
+    bool fits = drop < g->n && g->used - g->aus[drop].off + len <= cap && g->n - drop + 1 <= g->max;
     if (fits) drop_prefix(g, drop);
     g->previous_n = g->n;
     if (!fits) restart(g);  // a single AU larger than the whole arena: nothing can be kept
@@ -69,7 +73,8 @@ int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t t
       g->wait_idr = true;
       g->stream_only = true;
     }
-    g->overflows++;
+    // Count only the overflows that actually lose the decodable start; keeping the newest AUs is routine.
+    if (had_idr && !g->aus[0].idr) g->overflows++;
   }
   memcpy(g->arena + g->used, annexb, len);
   g->aus[g->n] = (gop_au){(uint32_t)g->used, (uint32_t)len, ts, idr};
