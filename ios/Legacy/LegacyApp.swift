@@ -220,7 +220,7 @@ enum Mood: String, Codable, Hashable {
             throw DeviceError(message: "unlock the phone and check calibration, board and live mirroring")
         }
         let run = RemoteRun(id: id, text: text, link: board.commands.links, stream: feed.streamID,
-                            deadline: ProcessInfo.processInfo.systemUptime + 180)
+                            deadline: ProcessInfo.processInfo.systemUptime + 300)
         try checkRemoteInput(run)
         seenRemoteIDs.insert(id)
         remoteRun = run

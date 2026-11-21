@@ -343,9 +343,10 @@ extension Pointer: Gestures {}
             return try await discard("screen or connection changed; decision discarded")
         }
         discards = 0
-        let stuck = repeating(act)
+        let stuck = repeating(act, limit: 2)
         if name == "replan" || stuck {
             record(planned.shot, act)
+            if stuck, !hints.contains(AgentLoop.repeatHint) { hints.append(AgentLoop.repeatHint) }
             try await replan(stuck: stuck)
             return false
         }
@@ -401,6 +402,11 @@ extension Pointer: Gestures {}
         return moves.count == limit - 1 && moves.allSatisfy { Actions.sameMove($0, act) }
             && moves.last?["changed"] != .bool(true)
     }
+
+    /// Added to the actor prompt after the same ineffective action is proposed again.
+    static let repeatHint = "An action that changed nothing must not be repeated. Some elements (such as the "
+        + "Calendar view switcher) only cycle views: if the goal needs another app, return Home first and tap "
+        + "that app's icon."
 
     func replan(stuck: Bool = false) async throws {
         guard let planner else { throw LLMError(message: "no planner model") }
