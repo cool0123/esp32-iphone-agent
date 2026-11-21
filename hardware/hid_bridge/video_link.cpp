@@ -164,8 +164,9 @@ static void streamStep() {
   cfg_ts = gop.cfg_ts;
   bool onlyP = gop.wait_idr && gop.stream_only;
   bool canContinue = gop_can_continue(&gop, txGen, next);
-  bool needsKeyframe = (gop.wait_idr && gen != txGen && !canContinue) ||
-                       (txGen == UINT32_MAX && gop.used > SNAP_MAX_BYTES);
+  // Ask for a fresh IDR only in the state that otherwise needs a manual mirror restart: no decodable start and a
+  // subscriber that cannot continue from what it already has. A settled GOP with a BLE-only reader is not stuck.
+  bool needsKeyframe = gop.wait_idr && !canContinue;
   memcpy(cfg, gop.cfg, cfg_len);
   xSemaphoreGive(lock);
   // Dropping old AUs rebases every index: the BLE sender must start over (it needs a new IDR anyway).

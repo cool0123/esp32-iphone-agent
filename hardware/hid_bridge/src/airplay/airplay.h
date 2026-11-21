@@ -11,9 +11,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// Plaintext reverse commands stopped this iOS 15 mirror in testing. Never enable by default.
+// A reverse forceKeyFrame request once stopped this iOS 15 mirror in testing, so it is off by default. The board
+// now only asks when it is already stuck (no decodable GOP and a subscriber that cannot continue): the outcome
+// there is a manual mirror restart anyway, so the attempt can only help. Build with
+// -DAIRPLAY_EXPERIMENTAL_KEYFRAME=1 to enable it.
 #ifndef AIRPLAY_EXPERIMENTAL_KEYFRAME
-#define AIRPLAY_EXPERIMENTAL_KEYFRAME 0
+#define AIRPLAY_EXPERIMENTAL_KEYFRAME 1
 #endif
 
 #ifdef __cplusplus
