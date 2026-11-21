@@ -187,10 +187,12 @@ enum Mood: String, Codable, Hashable {
         return data
     }
 
+    /// The run is bound to the board link (pointer state) but not to one video generation: a decoder restart
+    /// while the task is running must not cancel it. Every input still requires a fresh live frame.
     private func checkRemoteInput(_ run: RemoteRun) throws {
         guard UIApplication.shared.applicationState == .background, ops.enabled, ops.acceptsTasks,
               ProcessInfo.processInfo.systemUptime < run.deadline, remoteBoardReady,
-              board.commands.links == run.link, feed.streamID == run.stream else {
+              board.commands.links == run.link else {
             throw BlindError(reason: "remote task lost its live board, permission, or exceeded its deadline")
         }
     }

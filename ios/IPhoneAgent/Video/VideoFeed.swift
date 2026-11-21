@@ -78,6 +78,7 @@ extension ScreenSource {
     private(set) var transport = "ble"
     private(set) var networkReady = true
     private var wifiPublishStream: Int?
+    private var chainFailures = 0  // consecutive unusable responses while holding a resumable cursor
     private let archive = VideoArchive()
 
     init() {
@@ -373,14 +374,19 @@ extension ScreenSource {
                     await withCheckedContinuation { c in self.decoder.queue.async { c.resume() } }
                     if self.streamID != acceptedStream { cursor = VideoCursor(); self.networkReady = false }
                     failures = 0
+                    chainFailures = 0
                     try await Task.sleep(nanoseconds: 100_000_000)
                 } catch {
                     if Task.isCancelled || self.wifiGeneration != generation || !device.connected || device.links != link { return }
                     failures += 1
                     let invalidChain = !(error is URLError || error is VideoHTTPUnavailable || error is MonitorRenewalFailed)
-                    self.videoNetworkFailed(invalidChain: invalidChain)
-                    if invalidChain {
-                        cursor = VideoCursor(); saved = nil
+                    // A rejected cursor is definitive; a corrupt or truncated body is not. Keep the exact
+                    // offset so a retry can resume the board's P-only history instead of needing a new IDR.
+                    let cursorRejected = (error as? VideoHTTPUnavailable).map { (400...499).contains($0.status) } ?? false
+                    chainFailures = invalidChain ? chainFailures + 1 : 0
+                    self.videoNetworkFailed(invalidChain: invalidChain && chainFailures >= 3)
+                    if cursorRejected || chainFailures >= 3 {
+                        cursor = VideoCursor(); saved = nil; chainFailures = 0
                     }
                     if failures == 1 {
                         // Codes/status only: never log URLs, headers, bodies or credentials.
