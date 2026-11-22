@@ -104,7 +104,11 @@ enum Mood: String, Codable, Hashable {
     }
     func say(_ text: String) { message = text; DebugLog.write(text) }
     func tapForCalibration(x: Int, y: Int) async throws {
-        guard remoteRun == nil else { throw DeviceError(message: "a task is running") }
+        // A finished task keeps its record for status queries; only a live run blocks the calibration tap.
+        if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
+            throw DeviceError(message: "a task is running")
+        }
+        guard !agent.running else { throw DeviceError(message: "a task is running") }
         try await pointer.tap(Double(x) / 1000, Double(y) / 1000, aim: false)
     }
 
