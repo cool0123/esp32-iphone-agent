@@ -164,7 +164,7 @@ extension Pointer: Gestures {}
     /// The screen is gone (board, hotspot or mirroring lost): pause the run until it is back, in stages.
     /// Returns how many seconds it took, or nil if the screen was there all along. Never ends the run for a
     /// lost link before Recovery.limit.
-    func waitForScreen(poll: Double = 0.5) async throws -> Double? {
+    func waitForScreen(poll: Double = 0.25) async throws -> Double? {
         guard let screen else { throw BlindError() }
         func ready() -> Bool { screen.live && (lastActed == 0 || screen.capturedAt > lastActed) }
         guard !ready() else { return nil }
@@ -465,15 +465,17 @@ extension Pointer: Gestures {}
         // Keep action feedback compact; retain prior screen observations separately so returning to an
         // earlier screen does not make the actor forget that it already completed part of the task.
         let hidden: Set<String> = ["t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed"]
-        let history = steps.suffix(8).filter { $0["plan"] == nil }.map { s -> String in
+        // Latency: the actor needs the recent shape of the run, not its full transcript. Each step pays for these
+        // characters in prompt tokens, so keep a short, dense recent history.
+        let history = steps.suffix(4).filter { $0["plan"] == nil }.map { s -> String in
             let effect = s["changed"] == .bool(true) ? " -> screen changed"
                 : s["changed"] == .bool(false) ? " -> screen did NOT change" : ""
-            return String(PyJSON.dumps(s.without(hidden)).prefix(300)) + effect
+            return String(PyJSON.dumps(s.without(hidden)).prefix(200)) + effect
         }.joined(separator: "\n")
         let observations = steps.filter { $0["shot"] == .bool(true) && !($0["thought"]?.str ?? "").isEmpty }
-            .suffix(8).map { s in
+            .suffix(3).map { s in
                 PyJSON.dumps(["before_action": s["action"] ?? .null,
-                              "observation": .str(String((s["thought"]?.str ?? "").prefix(300)))])
+                              "observation": .str(String((s["thought"]?.str ?? "").prefix(200)))])
             }.joined(separator: "\n")
         var prompt = "Goal: \(task)\n\nPlan:\n\(plan)\n\n"
         if !observations.isEmpty {

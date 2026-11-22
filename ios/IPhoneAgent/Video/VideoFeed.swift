@@ -30,7 +30,7 @@ extension ScreenSource {
 
     /// Wait until the screen stops changing (AirPlay only sends frames on change). Mid-animation frames are big and
     /// can reach us late over BLE, so a gap is only "quiet" once it also covers the last frame's transport lag.
-    func settled(quiet: Double = 0.5, least: Double = 0.3, most: Double = 4) async {
+    func settled(quiet: Double = 0.35, least: Double = 0.2, most: Double = 3) async {
         let started = now()
         try? await Task.sleep(nanoseconds: UInt64(least * 1e9))
         while !Task.isCancelled && now() - updated < quiet + lag && now() - started < most {
@@ -444,7 +444,7 @@ extension ScreenSource {
                 try await currentFrame()
             } else {
                 await settled()
-                if await newer(than: since, timeout: 1.5) { return }
+                if await newer(than: since, timeout: 1.2) { return }
                 DebugLog.write(broken ? "frame: waiting for a complete keyframe" : "frame: no newer source frame; waiting for live video")
             }
         } catch {

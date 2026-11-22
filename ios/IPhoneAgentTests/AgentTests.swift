@@ -222,10 +222,10 @@ import XCTest
             let value = try JSONSerialization.jsonObject(with: Data($0.utf8))
             return try XCTUnwrap(value as? [String: String])
         }
-        XCTAssertEqual(entries.count, 8)
-        XCTAssertTrue(entries.first?["observation"]?.hasPrefix("Observed state 2:") == true)
+        XCTAssertEqual(entries.count, 3)  // only the most recent observations, to keep each step cheap
+        XCTAssertTrue(entries.first?["observation"]?.hasPrefix("Observed state 7:") == true)
         XCTAssertTrue(entries.last?["observation"]?.hasPrefix("Observed state 9:") == true)
-        XCTAssertTrue(entries.allSatisfy { ($0["observation"]?.count ?? 0) <= 300 })
+        XCTAssertTrue(entries.allSatisfy { ($0["observation"]?.count ?? 0) <= 200 })
         XCTAssertFalse(memory.contains("OVERFLOW"))
         XCTAssertFalse(memory.contains("UNOBSERVED"))
     }
