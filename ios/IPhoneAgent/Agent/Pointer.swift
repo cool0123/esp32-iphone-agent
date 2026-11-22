@@ -158,7 +158,16 @@ import Foundation
     func point(_ x: Double, _ y: Double, aim: Bool = false) async throws {
         guard calibrated else { throw DeviceError(message: "pointer not calibrated") }
         try await moveTo(dx(x), dy(y))
-        if aim && screen != nil { try await self.aim(x, y) }
+        // Finding the pointer costs a nudge, a fresh frame and a settle on every tap. Calibration is stable, so
+        // measure every third tap (and always the first) and let the other taps use the calibrated point.
+        if aim, screen != nil, shouldProbe() { try await self.aim(x, y) }
+    }
+
+    private var tapsSinceProbe = 0
+
+    private func shouldProbe() -> Bool {
+        tapsSinceProbe += 1
+        return tapsSinceProbe % 3 == 1
     }
 
     /// Closed loop: find the real pointer on screen, fix a miss, and learn the error for later moves.
