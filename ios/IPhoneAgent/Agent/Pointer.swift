@@ -169,6 +169,15 @@ import Foundation
     /// settle, so measuring on every tap is pure latency.
     var needsProbe = true
 
+    /// Ask the screen where the pointer really is after moving to (x, y), in screen fractions.
+    /// Used by the operator to map the input space onto the pixels, because iOS pointer acceleration makes the
+    /// mapping non-linear: the same input delta lands further away when the move is large.
+    func measurePosition(x: Double, y: Double) async throws -> CGPoint? {
+        guard calibrated else { throw DeviceError(message: "pointer not calibrated") }
+        try await moveTo(dx(x), dy(y))
+        return try await measure(x, y, model: false)
+    }
+
     /// Closed loop: find the real pointer on screen, fix a miss, and learn the error for later moves.
     ///
     /// A pointer that cannot be seen in the pixels (small frame, translucent spot, still screen) must not cancel

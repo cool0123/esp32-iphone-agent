@@ -16,6 +16,8 @@ import UIKit
     func setCaptureSize(width: Int, height: Int) async throws
     /// One operator-specified tap in grid units, used to calibrate and verify on-screen geometry.
     func tapForCalibration(x: Int, y: Int) async throws
+    /// Where the pointer actually ended up after a requested move, for mapping input onto pixels.
+    func measurePointer(x: Int, y: Int) async throws -> [String: Any]
 }
 
 extension OpsApp {
@@ -25,6 +27,10 @@ extension OpsApp {
 
     func tapForCalibration(x: Int, y: Int) async throws {
         throw DeviceError(message: "calibration taps are not supported on this build")
+    }
+
+    func measurePointer(x: Int, y: Int) async throws -> [String: Any] {
+        throw DeviceError(message: "pointer measurement is not supported on this build")
     }
 }
 
@@ -467,6 +473,16 @@ extension AppModel: OpsApp {
                 guard app.feed.live, let jpeg = app.feed.frame else { throw DeviceError(message: "no fresh screenshot available") }
                 data = ["jpeg": jpeg.base64EncodedString(), "capturedAt": app.feed.capturedAt, "live": app.feed.live]
             case "model.check": data = ["result": try await checkModel()]
+            case "pointer.measure":
+                guard let params = message["params"] as? [String: Any],
+                      let x = params["x"] as? Int, let y = params["y"] as? Int,
+                      (0...1000).contains(x), (0...1000).contains(y) else {
+                    throw DeviceError(message: "invalid measurement point")
+                }
+                guard !app.agent.running, UIApplication.shared.isProtectedDataAvailable, app.feed.live else {
+                    throw DeviceError(message: "pointer measurement needs an idle app and a live frame")
+                }
+                data = try await app.measurePointer(x: x, y: y)
             case "cal.tap":
                 // Only a deliberate calibration step: the app must be idle, unlocked and showing a live frame, so a
                 // stray coordinate cannot move the phone without an observed screen.

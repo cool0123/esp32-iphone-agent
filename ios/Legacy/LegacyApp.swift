@@ -110,6 +110,17 @@ enum Mood: String, Codable, Hashable {
         return state
     }
 
+    func measurePointer(x: Int, y: Int) async throws -> [String: Any] {
+        if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
+            throw DeviceError(message: "a task is running")
+        }
+        guard !agent.running else { throw DeviceError(message: "a task is running") }
+        let found = try await pointer.measurePosition(x: Double(x) / 1000, y: Double(y) / 1000)
+        var out: [String: Any] = ["requested": ["x": x, "y": y]]
+        if let found { out["measured"] = ["x": (found.x * 1000).rounded(), "y": (found.y * 1000).rounded()] }
+        return out
+    }
+
     func tapForCalibration(x: Int, y: Int) async throws {
         // A finished task keeps its record for status queries; only a live run blocks the calibration tap.
         if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
