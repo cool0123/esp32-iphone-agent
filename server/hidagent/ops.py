@@ -361,6 +361,14 @@ def create_app(
         if not tasks_enabled:
             raise HTTPException(404, "remote tasks are disabled")
 
+    @app.post("/api/tap", dependencies=[Depends(admin), Depends(local_tasks)])
+    async def tap(point: dict):
+        """One calibration tap in grid units (0-1000), refused unless the app is idle with a live frame."""
+        x, y = point.get("x"), point.get("y")
+        if not isinstance(x, int) or not isinstance(y, int) or not (0 <= x <= 1000 and 0 <= y <= 1000):
+            raise HTTPException(400, "x and y must be integers between 0 and 1000")
+        return await result_data(hub, "cal.tap", {"x": x, "y": y})
+
     @app.post("/api/tasks", status_code=202, dependencies=[Depends(admin), Depends(local_tasks)])
     async def submit_task(task: TaskStart):
         return await result_data(hub, "task.submit", task.model_dump())

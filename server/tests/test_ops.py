@@ -167,6 +167,14 @@ def test_capture_size_is_validated_server_side():
             valid_config({"captureSize": bad})
 
 
+def test_calibration_tap_validates_the_point():
+    with client(tasks_enabled=True) as c:
+        assert c.post("/api/tap", headers=ADMIN, json={"x": 500, "y": 960}).status_code == 503  # no phone
+        for bad in ({"x": -1, "y": 500}, {"x": 1001, "y": 500}, {"x": "500", "y": 500}, {}, {"x": 1.5, "y": 2}):
+            assert c.post("/api/tap", headers=ADMIN, json=bad).status_code == 400
+        assert c.post("/api/tap", headers={"Authorization": "Bearer wrong"}, json={"x": 1, "y": 1}).status_code == 401
+
+
 def test_config_round_trip_and_snapshot():
     with client() as c:
         with c.websocket_connect("/ws/device", headers=DEVICE) as ws:

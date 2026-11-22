@@ -103,6 +103,11 @@ enum Mood: String, Codable, Hashable {
         if ops.enabled { ops.start() }
     }
     func say(_ text: String) { message = text; DebugLog.write(text) }
+    func tapForCalibration(x: Int, y: Int) async throws {
+        guard remoteRun == nil else { throw DeviceError(message: "a task is running") }
+        try await pointer.tap(Double(x) / 1000, Double(y) / 1000, aim: false)
+    }
+
     func setCaptureSize(width: Int, height: Int) async throws {
         guard board.connected else { throw DeviceError(message: "board not connected") }
         _ = try await board.commands.send("res \(width) \(height)")

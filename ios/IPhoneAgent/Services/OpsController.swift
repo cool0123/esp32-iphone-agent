@@ -14,11 +14,17 @@ import UIKit
     func stopAgent() async
     /// Mirrored capture size, so the operator can trade frame size against how readable labels are.
     func setCaptureSize(width: Int, height: Int) async throws
+    /// One operator-specified tap in grid units, used to calibrate and verify on-screen geometry.
+    func tapForCalibration(x: Int, y: Int) async throws
 }
 
 extension OpsApp {
     func setCaptureSize(width: Int, height: Int) async throws {
         throw DeviceError(message: "capture size is not adjustable on this build")
+    }
+
+    func tapForCalibration(x: Int, y: Int) async throws {
+        throw DeviceError(message: "calibration taps are not supported on this build")
     }
 }
 
@@ -453,6 +459,19 @@ extension AppModel: OpsApp {
                 guard app.feed.live, let jpeg = app.feed.frame else { throw DeviceError(message: "no fresh screenshot available") }
                 data = ["jpeg": jpeg.base64EncodedString(), "capturedAt": app.feed.capturedAt, "live": app.feed.live]
             case "model.check": data = ["result": try await checkModel()]
+            case "cal.tap":
+                // Only a deliberate calibration step: the app must be idle, unlocked and showing a live frame, so a
+                // stray coordinate cannot move the phone without an observed screen.
+                guard let params = message["params"] as? [String: Any],
+                      let x = params["x"] as? Int, let y = params["y"] as? Int,
+                      (0...1000).contains(x), (0...1000).contains(y) else {
+                    throw DeviceError(message: "invalid calibration point")
+                }
+                guard !app.agent.running, UIApplication.shared.isProtectedDataAvailable, app.feed.live else {
+                    throw DeviceError(message: "calibration tap needs an idle app and a live frame")
+                }
+                try await app.tapForCalibration(x: x, y: y)
+                data = ["tapped": ["x": x, "y": y]]
             case "agent.stop":
                 await app.stopAgent()
                 data = ["stopped": true]
