@@ -37,6 +37,11 @@ extension OpsApp {
     var opsTaskTelemetry: [String: Any] { get }
 }
 
+/// Optional: exposes the pointer calibration state for diagnostics (never coordinates of user content).
+@MainActor protocol OpsPointerState: OpsApp {
+    var pointerState: [String: Any] { get }
+}
+
 /// Only the Legacy target opts into model-key rotation (separate from task authorization).
 @MainActor protocol OpsModelKeyApp: OpsApp {
     var opsCanRotateModelKey: Bool { get }
@@ -401,6 +406,9 @@ extension AppModel: OpsApp {
                     "recovering": app.opsRecovering, "needsHelp": app.opsNeedsHelp,
                     "frameLive": app.feed.live, "decoderNote": app.feed.note, "videoTransport": app.feed.transport,
                     "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? ""]]
+        if let pointer = (app as? any OpsPointerState)?.pointerState {
+            payload["pointer"] = pointer
+        }
         if let tasks = app as? any OpsTaskApp {
             payload["taskControl"] = ["enabled": enabled && acceptsTasks, "phone": tasks.opsTaskTelemetry] as [String: Any]
         }

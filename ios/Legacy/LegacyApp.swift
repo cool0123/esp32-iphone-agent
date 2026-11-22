@@ -11,7 +11,7 @@ enum Mood: String, Codable, Hashable {
     var body: some Scene { WindowGroup { LegacyView(model: model, board: model.board, settings: model.settings, agent: model.agent) } }
 }
 
-@MainActor final class LegacyModel: ObservableObject, OpsTaskApp, OpsModelKeyApp {
+@MainActor final class LegacyModel: ObservableObject, OpsTaskApp, OpsModelKeyApp, OpsPointerState {
     let board = BoardLink()
     let settings = Settings()
     let feed = VideoFeed()
@@ -103,13 +103,22 @@ enum Mood: String, Codable, Hashable {
         if ops.enabled { ops.start() }
     }
     func say(_ text: String) { message = text; DebugLog.write(text) }
+    var pointerState: [String: Any] {
+        var state: [String: Any] = ["calibrated": pointer.calibrated]
+        if let span = pointer.span { state["span"] = ["w": span.w, "h": span.h] }
+        if let pos = pointer.position { state["pos"] = ["x": pos.0, "y": pos.1] }
+        return state
+    }
+
     func tapForCalibration(x: Int, y: Int) async throws {
         // A finished task keeps its record for status queries; only a live run blocks the calibration tap.
         if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
             throw DeviceError(message: "a task is running")
         }
         guard !agent.running else { throw DeviceError(message: "a task is running") }
-        try await pointer.tap(Double(x) / 1000, Double(y) / 1000, aim: false)
+        // Verify the pointer before clicking: dead reckoning alone sends the click off-screen when the
+        // calibration mapping drifts, and the operator sees nothing happen.
+        try await pointer.tap(Double(x) / 1000, Double(y) / 1000, aim: true)
     }
 
     func setCaptureSize(width: Int, height: Int) async throws {

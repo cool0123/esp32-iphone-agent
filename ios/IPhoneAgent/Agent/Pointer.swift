@@ -23,6 +23,7 @@ import Foundation
     private let file: URL
     @Published private(set) var span: Span?  // mouse units needed to cross the full screen width / height
     private var pos: (Int, Int)?  // pointer position in mouse units; nil = unknown
+    var position: (Int, Int)? { pos }  // read-only for diagnostics
     private var moves = 0
     private var link = 0  // device.links when the pointer was last homed
     /// where the pointer really landed (seen on screen) for the fraction we aimed at, per axis; a line fit
