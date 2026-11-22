@@ -54,9 +54,11 @@ enum Mood: String, Codable, Hashable {
         board.onVideo = { [weak self] in self?.feed.receive($0) }
         board.onStatus = { [weak self] status in
             guard let self else { return }
-            self.feed.mirroring = status.ap == "streaming"
+            // AirPlay reports "connected" (not "streaming") whenever iOS pauses video for a static screen;
+            // that is a lull, not a lost session. Only "idle" or a USB fault ends the run.
+            self.feed.mirroring = status.ap != "idle"
             if let up = status.up { self.feed.boardClock(ms: up) }
-            if !self.feed.mirroring || status.usb != "ok" {
+            if status.ap == "idle" || status.usb != "ok" {
                 self.cancelOpsTask(reason: "screen mirroring or USB input stopped")
             }
         }

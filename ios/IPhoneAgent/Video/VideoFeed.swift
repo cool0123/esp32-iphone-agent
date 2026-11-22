@@ -191,6 +191,7 @@ extension ScreenSource {
             if mirroring && !broken {
                 if allowUnchanged && live { return "live (unchanged)" }
                 if frame != nil && capturedAt > 0 && now() - capturedAt < maxAge && live { return "live" }
+                await wakePausedEncoder()  // a static screen pauses the iOS encoder; dirty it before waiting
                 if await fresh(since: now() - maxAge, timeout: wait) != nil, live { return "live (waited)" }
             }
             throw BlindError(reason: "live screen has not caught up to the present; operation cancelled")
@@ -205,6 +206,17 @@ extension ScreenSource {
             throw BlindError(reason: "screen has not caught up to the present; operation cancelled")
         }
         return "snap"
+    }
+
+    /// iOS stops sending mirror video after a few seconds of a static screen, and the board then reports AirPlay
+    /// as connected rather than streaming; waiting for a frame that never comes looks like a dead screen. A small
+    /// pointer wiggle — out and back, so the net position is unchanged — gives the encoder something to send.
+    private func wakePausedEncoder() async {
+        guard let device, device.connected else { return }
+        try? await device.send("move 8 0")
+        try? await Task.sleep(nanoseconds: 40_000_000)
+        try? await device.send("move -8 0")
+        try? await Task.sleep(nanoseconds: 120_000_000)
     }
 
     /// Ask the board for the current GOP and wait until it is decoded. Returns the latency in ms.
