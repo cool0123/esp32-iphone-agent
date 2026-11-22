@@ -110,6 +110,15 @@ enum Mood: String, Codable, Hashable {
         return state
     }
 
+    func setPointerSpan(w: Int, h: Int) async throws -> [String: Any] {
+        if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
+            throw DeviceError(message: "a task is running")
+        }
+        guard !agent.running else { throw DeviceError(message: "a task is running") }
+        pointer.setSpan(Pointer.Span(w: w, h: h))
+        return ["span": ["w": w, "h": h]]
+    }
+
     func calibratePointer() async throws -> [String: Any] {
         if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
             throw DeviceError(message: "a task is running")

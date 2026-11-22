@@ -369,6 +369,14 @@ def create_app(
             raise HTTPException(400, "x and y must be integers between 0 and 1000")
         return await result_data(hub, "cal.tap", {"x": x, "y": y})
 
+    @app.post("/api/pointer/span", dependencies=[Depends(admin), Depends(local_tasks)])
+    async def pointer_span(body: dict):
+        """Pin the pointer span so two candidate calibrations can be compared on the same device."""
+        w, h = body.get("w"), body.get("h")
+        if not isinstance(w, int) or not isinstance(h, int) or not (100 <= w <= 4000 and 100 <= h <= 4000):
+            raise HTTPException(400, "w and h must be integers between 100 and 4000")
+        return await result_data(hub, "pointer.setSpan", {"w": w, "h": h})
+
     @app.post("/api/pointer/calibrate", dependencies=[Depends(admin), Depends(local_tasks)])
     async def pointer_calibrate():
         """Re-solve the pointer span from real measurements on screen."""

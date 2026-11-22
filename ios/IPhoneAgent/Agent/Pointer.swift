@@ -236,6 +236,16 @@ import Foundation
         try await moveTo(p.0 + mx, p.1 + my, rehome: false)
     }
 
+    /// Force the span (mouse units across the screen). Used by the operator to compare candidate calibrations
+    /// on the same device instead of guessing which one is right.
+    func setSpan(_ s: Span) {
+        span = s
+        seen = ["x": [], "y": []]
+        (pos, quality, aspect) = (nil, nil, screenAspect())
+        save()
+        log("span set to \(s.w)x\(s.h)")
+    }
+
     /// Wiggle the pointer and find it on screen, near the target first, then anywhere. model: ask the vision
     /// model when the pixels don't show it (~20 s, rarely right); a tap's aim never waits for that.
     private func measure(_ x: Double, _ y: Double, model: Bool = true) async throws -> CGPoint? {

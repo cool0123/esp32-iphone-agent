@@ -20,6 +20,8 @@ import UIKit
     func measurePointer(x: Int, y: Int) async throws -> [String: Any]
     /// Re-solve the pointer span from measurements, so taps stop inheriting a stale factory constant.
     func calibratePointer() async throws -> [String: Any]
+    /// Pin the pointer span to an explicit value (operator A/B of candidate calibrations).
+    func setPointerSpan(w: Int, h: Int) async throws -> [String: Any]
 }
 
 extension OpsApp {
@@ -37,6 +39,10 @@ extension OpsApp {
 
     func calibratePointer() async throws -> [String: Any] {
         throw DeviceError(message: "pointer calibration is not supported on this build")
+    }
+
+    func setPointerSpan(w: Int, h: Int) async throws -> [String: Any] {
+        throw DeviceError(message: "pointer span is not supported on this build")
     }
 }
 
@@ -479,6 +485,14 @@ extension AppModel: OpsApp {
                 guard app.feed.live, let jpeg = app.feed.frame else { throw DeviceError(message: "no fresh screenshot available") }
                 data = ["jpeg": jpeg.base64EncodedString(), "capturedAt": app.feed.capturedAt, "live": app.feed.live]
             case "model.check": data = ["result": try await checkModel()]
+            case "pointer.setSpan":
+                guard let params = message["params"] as? [String: Any],
+                      let w = params["w"] as? Int, let h = params["h"] as? Int,
+                      (100...4000).contains(w), (100...4000).contains(h) else {
+                    throw DeviceError(message: "invalid span")
+                }
+                guard !app.agent.running else { throw DeviceError(message: "a task is running") }
+                data = try await app.setPointerSpan(w: w, h: h)
             case "pointer.calibrate":
                 guard !app.agent.running, UIApplication.shared.isProtectedDataAvailable, app.feed.live else {
                     throw DeviceError(message: "pointer calibration needs an idle app and a live frame")
