@@ -123,6 +123,15 @@ import XCTest
         XCTAssertTrue(agent.repeating(swipe))
     }
 
+    func testFingerprintNoticesAnOscillation() {
+        func block(_ v: UInt8) -> [UInt8] { Array(repeating: v, count: 64) }
+        let a = block(30), b = block(200)
+        XCTAssertEqual(Vision.distance(a, a), 0)
+        XCTAssertLessThanOrEqual(Vision.distance(a, a.map { $0 &+ 2 }), 6)   // same screen, slight noise
+        XCTAssertGreaterThan(Vision.distance(a, b), 12)                      // a different screen
+        XCTAssertEqual(Vision.distance(nil, a), Int.max)
+    }
+
     func testDeadTapIsAvoidedOnTheNextAttempt() {
         let pand = CGPoint(x: 0.62, y: 0.95)
         XCTAssertNil(AgentLoop.avoidDeadTap(pand, []))

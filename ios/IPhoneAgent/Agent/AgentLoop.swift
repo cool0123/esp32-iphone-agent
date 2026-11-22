@@ -98,6 +98,8 @@ extension Pointer: Gestures {}
     /// Consecutive actions that left the screen unchanged. Three in a row means the agent is stuck on one screen
     /// and must change strategy instead of trying another variation of the same idea.
     private var noChangeStreak = 0
+    /// Fingerprints of the last few screens, to detect A→B→A→B cycling that "nothing changed" cannot see.
+    private var screens: [[UInt8]] = []
     /// When the last gesture ended: the model never decides on a frame from before it.
     private(set) var lastActed = 0.0
     /// Awaited before every look and every gesture (the app holds the run while its own UI is in front).
@@ -349,6 +351,14 @@ extension Pointer: Gestures {}
             return try await discard("screen or connection changed; decision discarded")
         }
         discards = 0
+        if cycling(), name != "done", name != "fail" {
+            record(planned.shot, ["action": .str("replan (stuck)"),
+                                  "reason": .str("the screen keeps returning to a state already seen")])
+            screens.removeAll()
+            if !hints.contains(AgentLoop.cycleHint) { hints.append(AgentLoop.cycleHint) }
+            try await replan(stuck: true)
+            return false
+        }
         if noChangeStreak >= 3, name != "done", name != "fail" {
             record(planned.shot, ["action": .str("replan (stuck)"),
                                   "reason": .str("three actions in a row changed nothing")])
@@ -394,6 +404,7 @@ extension Pointer: Gestures {}
             let changed = Vision.changed(seen, screen.frame, ignore: spots)
             steps[steps.count - 1]["changed"] = .bool(changed)
             noChangeStreak = changed ? 0 : noChangeStreak + 1
+            rememberScreen(screen.frame)
             if name == "tap" || name == "click", let target = tapPoint(step) {
                 if changed { deadTaps.removeAll() } else { rememberDeadTap(target) }
             }
@@ -451,6 +462,25 @@ extension Pointer: Gestures {}
         return moves.count == limit - 1 && moves.allSatisfy { Actions.sameMove($0, act) }
             && moves.last?["changed"] != .bool(true)
     }
+
+    /// True when the current screen matches one from two steps ago while the step in between differs: an
+    /// oscillation, which no single action's "changed nothing" flag can detect.
+    private func cycling() -> Bool {
+        guard screens.count >= 3, let current = screens.last else { return false }
+        let previous = screens[screens.count - 2], older = screens[screens.count - 3]
+        return Vision.distance(current, older) <= 6 && Vision.distance(current, previous) > 12
+    }
+
+    private func rememberScreen(_ frame: Data?) {
+        guard let print = Vision.fingerprint(frame) else { return }
+        screens.append(print)
+        if screens.count > 6 { screens.removeFirst() }
+    }
+
+    /// Added when the agent oscillates between two screens instead of making progress.
+    static let cycleHint = "The screen keeps returning to a state you already saw, so the last actions undo each "
+        + "other. Do not repeat them: if a tap opens the AssistiveTouch menu, close it by tapping far from the "
+        + "floating button and then tap the target 5% away from its centre, or pick another route."
 
     /// Added to the actor prompt once several different actions left the screen unchanged.
     static let stuckScreenHint = "Several actions in a row changed nothing on this screen. Do not try another "

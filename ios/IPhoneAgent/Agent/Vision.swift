@@ -60,6 +60,20 @@ enum Vision {
         return hits >= 6
     }
 
+    /// A tiny fingerprint of the whole screen, used to notice that the agent is cycling between two screens
+    /// (for example: tap a tab, the AssistiveTouch menu opens, tap outside, tap the tab again).
+    static func fingerprint(_ jpeg: Data?, grid: Int = 8) -> [UInt8]? {
+        guard let jpeg, let img = image(jpeg) else { return nil }
+        let g = gray(img, grid, grid)
+        return g.px.map { UInt8(clamping: $0) }
+    }
+
+    /// Mean absolute difference between two fingerprints, in grey levels.
+    static func distance(_ a: [UInt8]?, _ b: [UInt8]?) -> Int {
+        guard let a, let b, a.count == b.count, !a.isEmpty else { return .max }
+        return zip(a, b).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) } / a.count
+    }
+
     /// True only when a substantial share of the screen differs.
     ///
     /// Used for the pre-action check, where a decision was made on the frame the model saw. A persistent local
