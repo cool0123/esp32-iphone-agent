@@ -49,6 +49,9 @@ bool monitor_view_open(const gop_buf *g, const video_ring *r, uint32_t epoch, ui
 bool monitor_view_read(const gop_buf *g, const video_ring *r, uint32_t epoch,
                        const video_monitor_view *v, uint64_t offset, uint8_t *out, size_t len) {
   if (v->epoch != epoch || offset < v->start || offset > v->end || len > v->end - offset) return false;
-  return v->from_gop ? gop_view_read(g, &v->prefix, (size_t)(offset - v->gop_start), out, len)
-                     : video_ring_read(r, offset, out, len);
+  // Prefer the byte ring: it is addressed absolutely and survives a GOP rebase, while the GOP snapshot is
+  // invalidated whenever the oldest access units are dropped. A long download must not be cut in half just
+  // because the buffer made room while it was being sent.
+  if (video_ring_read(r, offset, out, len)) return true;
+  return v->from_gop ? gop_view_read(g, &v->prefix, (size_t)(offset - v->gop_start), out, len) : false;
 }

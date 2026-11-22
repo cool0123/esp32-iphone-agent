@@ -299,7 +299,7 @@ bool video_monitor_open(uint32_t epoch, uint64_t offset, bool cursor, MonitorVie
   if (!ready || !monitorRing.cap) return false;
   xSemaphoreTake(lock, portMAX_DELAY);
   bool ok = monitor_view_open(&gop, &monitorRing, monitorEpoch, monitorAt,
-                              epoch, offset, cursor, 128 * 1024, view);
+                              epoch, offset, cursor, 64 * 1024, view);
   xSemaphoreGive(lock);
   return ok;
 }
