@@ -35,8 +35,12 @@ On this handset the floating button sits over the bottom tab bar, so a tap on a 
 AssistiveTouch menu instead. If the menu appears and the goal is not Home, tap well outside the menu to \
 close it, then tap the tab 3-5% away from the middle of it. Measured geometry on this handset (screen fractions, x right / y down): the Clock tab bar labels sit at \
 y≈0.96, with 世界时钟, 闹钟, 秒表, 计时器 centred at x≈0.125, 0.375, 0.626, 0.875 - tap the label row, not \
-higher up. In Calendar the view button is in the navigation bar at the top right (x≈0.90, y≈0.08) and cycles \
-day / week / month / year. The Settings list begins at y≈0.15 and scrolls. Treat these as measured starting \
+higher up. In Calendar the month grid spans y≈0.10-0.44 and changes months only with a vertical swipe that \
+starts on the grid (start near y≈0.30): swipe up for the next month, down for the previous one. Left/right \
+swipes on the grid, the header or the event list do nothing, so turn a requested left/right month swipe into \
+the vertical one instead of retrying it. The view switcher is the red-orange square button in the navigation \
+bar (≈x 0.64, y 0.05); x≈0.90 is the + new-event button, so never tap there to change views. The Settings list \
+begins at y≈0.15 and scrolls. Treat these as measured starting \
 points and still confirm on the screenshot before tapping. Typing sends ASCII only: never type Chinese, \
 pinyin or emoji. To open an app, find and tap its visible \
 icon (or use Home Screen search with English/ASCII text) instead of typing Chinese.
