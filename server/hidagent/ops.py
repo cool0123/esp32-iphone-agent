@@ -369,6 +369,11 @@ def create_app(
             raise HTTPException(400, "x and y must be integers between 0 and 1000")
         return await result_data(hub, "cal.tap", {"x": x, "y": y})
 
+    @app.post("/api/pointer/calibrate", dependencies=[Depends(admin), Depends(local_tasks)])
+    async def pointer_calibrate():
+        """Re-solve the pointer span from real measurements on screen."""
+        return await result_data(hub, "pointer.calibrate", {})
+
     @app.post("/api/pointer/measure", dependencies=[Depends(admin), Depends(local_tasks)])
     async def pointer_measure(point: dict):
         """Move to a grid point and report where the pointer actually landed (input-to-pixel mapping)."""

@@ -110,6 +110,17 @@ enum Mood: String, Codable, Hashable {
         return state
     }
 
+    func calibratePointer() async throws -> [String: Any] {
+        if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
+            throw DeviceError(message: "a task is running")
+        }
+        guard !agent.running else { throw DeviceError(message: "a task is running") }
+        guard let solved = try await pointer.selfCalibrate() else {
+            throw DeviceError(message: "the pointer could not be measured")
+        }
+        return ["span": ["w": solved.w, "h": solved.h]]
+    }
+
     func measurePointer(x: Int, y: Int) async throws -> [String: Any] {
         if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
             throw DeviceError(message: "a task is running")

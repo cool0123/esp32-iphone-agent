@@ -178,6 +178,39 @@ import Foundation
         return try await measure(x, y, model: false)
     }
 
+    /// Measure where the pointer really lands at two points per axis and solve for the span, so a factory
+    /// constant that does not match this device (it does not: the vertical span was 16% off on this phone) stops
+    /// skewing every tap. Called once after launch and on operator request.
+    @discardableResult
+    func selfCalibrate() async throws -> Span? {
+        guard let nominal = span, screen != nil else { return nil }
+        var samples: [(asked: CGPoint, found: CGPoint)] = []
+        for at in [CGPoint(x: 0.3, y: 0.3), CGPoint(x: 0.7, y: 0.7)] {
+            try await moveTo(dx(at.x), dy(at.y))
+            if let found = try await measure(at.x, at.y, model: false) { samples.append((at, found)) }
+        }
+        guard samples.count == 2 else { return nil }
+        let sx = (samples[1].found.x - samples[0].found.x) / (samples[1].asked.x - samples[0].asked.x)
+        let sy = (samples[1].found.y - samples[0].found.y) / (samples[1].asked.y - samples[0].asked.y)
+        // Only trust a measurement that is in the right ballpark; a wild fit would be worse than the constant.
+        guard (0.4...1.6).contains(sx), (0.4...1.6).contains(sy) else {
+            log(String(format: "self-calibration rejected: slopes %.3f / %.3f", sx, sy))
+            return nil
+        }
+        let solved = Span(w: Int((Double(nominal.w) / sx).rounded()), h: Int((Double(nominal.h) / sy).rounded()))
+        span = solved
+        seen = ["x": [], "y": []]
+        for s in samples {
+            remember("x", (s.asked.x, s.found.x))
+            remember("y", (s.asked.y, s.found.y))
+        }
+        quality = min(abs(sx - 1), abs(sy - 1))
+        aspect = screenAspect()
+        save()
+        log("self-calibration: span \(nominal.w)x\(nominal.h) -> \(solved.w)x\(solved.h)")
+        return solved
+    }
+
     /// Closed loop: find the real pointer on screen, fix a miss, and learn the error for later moves.
     ///
     /// A pointer that cannot be seen in the pixels (small frame, translucent spot, still screen) must not cancel
