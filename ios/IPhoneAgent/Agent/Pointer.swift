@@ -194,9 +194,11 @@ import Foundation
         await screen.settled(quiet: 0.15, least: 0.1, most: 0.6)  // pointer at rest
         let before = screen.frame, sent = now()
         try await device.send("move \(nudge) 0")
-        var after = await screen.fresh(since: sent, timeout: 1.2)
+        // Latency: the nudge shows up in the next frame within a few hundred milliseconds on this link, so a
+        // long wait only slows every tap down. A miss still falls back to the calibrated point.
+        var after = await screen.fresh(since: sent, timeout: 0.7)
         if after != nil {
-            await screen.settled(quiet: 0.1, least: 0.05, most: 0.4)
+            await screen.settled(quiet: 0.1, least: 0.05, most: 0.3)
             after = screen.frame
         }
         try await device.send("move \(-nudge) 0")
