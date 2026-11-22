@@ -141,6 +141,14 @@ enum Mood: String, Codable, Hashable {
         return out
     }
 
+    func swipeForCalibration(x1: Int, y1: Int, x2: Int, y2: Int, hold: Bool) async throws {
+        if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {
+            throw DeviceError(message: "a task is running")
+        }
+        guard !agent.running else { throw DeviceError(message: "a task is running") }
+        try await pointer.swipe(Double(x1) / 1000, Double(y1) / 1000, Double(x2) / 1000, Double(y2) / 1000, hold: hold)
+    }
+
     func tapForCalibration(x: Int, y: Int) async throws {
         // A finished task keeps its record for status queries; only a live run blocks the calibration tap.
         if let run = remoteRun, ["preparing", "running", "stopping"].contains(run.state) {

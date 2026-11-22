@@ -16,6 +16,8 @@ import UIKit
     func setCaptureSize(width: Int, height: Int) async throws
     /// One operator-specified tap in grid units, used to calibrate and verify on-screen geometry.
     func tapForCalibration(x: Int, y: Int) async throws
+    /// One operator-specified gesture in grid units, used to verify that swipes actually move the screen.
+    func swipeForCalibration(x1: Int, y1: Int, x2: Int, y2: Int, hold: Bool) async throws
     /// Where the pointer actually ended up after a requested move, for mapping input onto pixels.
     func measurePointer(x: Int, y: Int) async throws -> [String: Any]
     /// Re-solve the pointer span from measurements, so taps stop inheriting a stale factory constant.
@@ -31,6 +33,10 @@ extension OpsApp {
 
     func tapForCalibration(x: Int, y: Int) async throws {
         throw DeviceError(message: "calibration taps are not supported on this build")
+    }
+
+    func swipeForCalibration(x1: Int, y1: Int, x2: Int, y2: Int, hold: Bool) async throws {
+        throw DeviceError(message: "calibration swipes are not supported on this build")
     }
 
     func measurePointer(x: Int, y: Int) async throws -> [String: Any] {
@@ -485,6 +491,19 @@ extension AppModel: OpsApp {
                 guard app.feed.live, let jpeg = app.feed.frame else { throw DeviceError(message: "no fresh screenshot available") }
                 data = ["jpeg": jpeg.base64EncodedString(), "capturedAt": app.feed.capturedAt, "live": app.feed.live]
             case "model.check": data = ["result": try await checkModel()]
+            case "cal.swipe":
+                guard let params = message["params"] as? [String: Any],
+                      let x1 = params["x1"] as? Int, let y1 = params["y1"] as? Int,
+                      let x2 = params["x2"] as? Int, let y2 = params["y2"] as? Int,
+                      [x1, x2].allSatisfy({ (0...1000).contains($0) }), [y1, y2].allSatisfy({ (0...1000).contains($0) }) else {
+                    throw DeviceError(message: "invalid swipe")
+                }
+                guard !app.agent.running, UIApplication.shared.isProtectedDataAvailable, app.feed.live else {
+                    throw DeviceError(message: "calibration swipe needs an idle app and a live frame")
+                }
+                try await app.swipeForCalibration(x1: x1, y1: y1, x2: x2, y2: y2,
+                                                  hold: params["hold"] as? Bool ?? false)
+                data = ["done": true]
             case "pointer.setSpan":
                 guard let params = message["params"] as? [String: Any],
                       let w = params["w"] as? Int, let h = params["h"] as? Int,

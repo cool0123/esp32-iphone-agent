@@ -369,6 +369,16 @@ def create_app(
             raise HTTPException(400, "x and y must be integers between 0 and 1000")
         return await result_data(hub, "cal.tap", {"x": x, "y": y})
 
+    @app.post("/api/swipe", dependencies=[Depends(admin), Depends(local_tasks)])
+    async def swipe_for_calibration(body: dict):
+        """Run one operator-specified gesture so swipe mechanics can be verified without a model loop."""
+        coords = [body.get(k) for k in ("x1", "y1", "x2", "y2")]
+        if not all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 1000 for v in coords):
+            raise HTTPException(400, "x1, y1, x2 and y2 must be integers between 0 and 1000")
+        x1, y1, x2, y2 = coords
+        return await result_data(hub, "cal.swipe",
+                                 {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "hold": body.get("hold") is True})
+
     @app.post("/api/pointer/span", dependencies=[Depends(admin), Depends(local_tasks)])
     async def pointer_span(body: dict):
         """Pin the pointer span so two candidate calibrations can be compared on the same device."""
