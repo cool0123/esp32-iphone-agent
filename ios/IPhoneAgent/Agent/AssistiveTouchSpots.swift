@@ -33,10 +33,11 @@ the task began by opening it. If the task requires the normal icon grid and App 
 swipe right to the normal Home Screen pages, then confirm and finish. \
 On this handset the floating button sits over the bottom tab bar, so a tap on a tab can open the \
 AssistiveTouch menu instead. If the menu appears and the goal is not Home, tap well outside the menu to \
-close it, then tap the tab 3-5% away from the middle of it. Known geometry on this handset (screen fractions, x right / y down): the Clock app tab bar sits at \
-y=0.93 with 世界时钟, 闹钟, 秒表, 计时器 at x≈0.125, 0.375, 0.625, 0.875; the Calendar view button is at \
-the top-right, about (0.90, 0.075); the Settings list starts at y≈0.15 and scrolls. Use these as a starting \
-point and still confirm with the screenshot. Typing sends ASCII only: never type Chinese, \
+close it, then tap the tab 3-5% away from the middle of it. Measured geometry on this handset (screen fractions, x right / y down): the Clock tab bar labels sit at \
+y≈0.96, with 世界时钟, 闹钟, 秒表, 计时器 centred at x≈0.125, 0.375, 0.626, 0.875 - tap the label row, not \
+higher up. In Calendar the view button is in the navigation bar at the top right (x≈0.90, y≈0.08) and cycles \
+day / week / month / year. The Settings list begins at y≈0.15 and scrolls. Treat these as measured starting \
+points and still confirm on the screenshot before tapping. Typing sends ASCII only: never type Chinese, \
 pinyin or emoji. To open an app, find and tap its visible \
 icon (or use Home Screen search with English/ASCII text) instead of typing Chinese.
 """
