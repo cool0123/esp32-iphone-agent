@@ -14,6 +14,13 @@ import Foundation
     static let nudge = 12                   // mouse units the pointer is wiggled by to find it on screen
     static let aimTolerance = 0.008         // screen fraction; a bigger miss is corrected before pressing
     static let maxMiss = 0.06               // larger misses are too uncertain to authorize a click
+    static let edge = 0.03                  // screen fraction where a move starts running into the border
+
+    /// Targets this close to a border need a fresh home: iOS clamps the pointer there and the position bookkeeping
+    /// then disagrees with the screen, so every following tap misses by an unknown amount.
+    static func nearEdge(_ x: Double, _ y: Double) -> Bool {
+        x < edge || x > 1 - edge || y < edge || y > 1 - edge
+    }
 
     struct Span: Codable, Equatable { var w: Int, h: Int }
     private struct Saved: Codable { var w: Int, h: Int, seen: [String: [[Double]]]?, quality: Double?, aspect: Double? }
@@ -340,6 +347,7 @@ import Foundation
     func tap(_ x: Double, _ y: Double, aim: Bool = false) async throws {
         let link = device.links
         let stream = (screen as? VideoFeed)?.streamID
+        if Self.nearEdge(x, y) { pos = nil }  // hamming into the border loses the position for every later tap
         try await point(x, y, aim: aim)
         try Task.checkCancellation()
         guard link == device.links, stream == (screen as? VideoFeed)?.streamID, screen?.live != false else {
@@ -349,7 +357,7 @@ import Foundation
         try await Task.sleep(nanoseconds: UInt64(Self.tapGap * 1e9))
     }
 
-    func swipe(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double, hold: Bool = true) async throws {
+    func swipe(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double, hold: Bool = false) async throws {
         try await drag([CGPoint(x: x1, y: y1), CGPoint(x: x2, y: y2)], hold: hold)
     }
 
@@ -358,6 +366,7 @@ import Foundation
     func drag(_ points: [CGPoint], hold: Bool = true) async throws {
         let link = device.links
         let stream = (screen as? VideoFeed)?.streamID
+        if Self.nearEdge(Double(points[0].x), Double(points[0].y)) { pos = nil }
         try await point(Double(points[0].x), Double(points[0].y))
         try Task.checkCancellation()
         guard link == device.links, stream == (screen as? VideoFeed)?.streamID, screen?.live != false else {
