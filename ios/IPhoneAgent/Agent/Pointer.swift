@@ -168,6 +168,8 @@ import Foundation
     /// first tap of a run. Calibration does not drift on its own, and every probe costs a nudge, a frame and a
     /// settle, so measuring on every tap is pure latency.
     var needsProbe = true
+    /// Guard so the startup calibration runs once per launch.
+    var measuredOnce = false
 
     /// Ask the screen where the pointer really is after moving to (x, y), in screen fractions.
     /// Used by the operator to map the input space onto the pixels, because iOS pointer acceleration makes the

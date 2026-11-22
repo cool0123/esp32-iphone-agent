@@ -95,6 +95,7 @@ extension Pointer: Gestures {}
     /// Tap targets that changed nothing (typically the AssistiveTouch floating button, which sits over the tab
     /// bar). Remembered as screen fractions so later taps land beside them instead of being swallowed again.
     private var deadTaps: [CGPoint] = []
+    private var recalibrating = false  // a pointer re-solve is in flight
     /// Consecutive actions that left the screen unchanged. Three in a row means the agent is stuck on one screen
     /// and must change strategy instead of trying another variation of the same idea.
     private var noChangeStreak = 0
@@ -429,6 +430,17 @@ extension Pointer: Gestures {}
         deadTaps.removeAll { abs($0.x - p.x) < 0.04 && abs($0.y - p.y) < 0.04 }
         deadTaps.append(p)
         if deadTaps.count > 4 { deadTaps.removeFirst() }
+        // Three taps in different places that changed nothing mean the pointer mapping is off, not the model:
+        // measure where the pointer really lands and solve the span again instead of grinding through steps.
+        if deadTaps.count == 3, let pointer = phone as? Pointer, !recalibrating {
+            recalibrating = true
+            Task { @MainActor in
+                defer { recalibrating = false }
+                if let solved = try? await pointer.selfCalibrate() {
+                    DebugLog.write("pointer span re-solved from measurements: \(solved.w)x\(solved.h)")
+                }
+            }
+        }
         DebugLog.write(String(format: "tap at (%.3f, %.3f) changed nothing; will tap beside it", p.x, p.y))
     }
 

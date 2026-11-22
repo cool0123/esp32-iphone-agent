@@ -237,6 +237,11 @@ enum Mood: String, Codable, Hashable {
         else if !feed.live { readiness = "no_live_frame" }
         else if !pointer.calibrated { readiness = "not_calibrated" }
         else { readiness = "ready" }
+        // A phone that has never been measured only carries the factory constant; fix that as soon as it is idle
+        // and live, without waiting for a failed tap to reveal it.
+        if readiness == "ready", pointer.quality == nil, !pointer.measuredOnce, remoteRun == nil {
+            Task { await calibratePointerIfNeeded() }
+        }
         var data: [String: Any] = ["readiness": readiness]
         if let run = remoteRun { data["latest"] = remoteStatus(run) }
         return data
@@ -372,6 +377,16 @@ enum Mood: String, Codable, Hashable {
         let hasAnswer = !(answer ?? "").isEmpty
         remoteRun?.state = action == "done" && hasAnswer ? "completed" : action == "stopped" ? "stopped" : "failed"
         remoteRun?.result = String((hasAnswer ? answer ?? "" : last?["reason"]?.str ?? "no verified result").prefix(800))
+    }
+
+    /// A fresh install only has the factory constant, which was 16% off on this phone: measure the real span
+    /// once the mirror is live, so taps are not silently missing until someone notices.
+    func calibratePointerIfNeeded() async {
+        guard pointer.calibrated, pointer.quality == nil, !pointer.measuredOnce, feed.live else { return }
+        pointer.measuredOnce = true
+        if let solved = try? await pointer.selfCalibrate() {
+            DebugLog.write("startup pointer calibration: span \(solved.w)x\(solved.h)")
+        }
     }
 
     func start() async {
