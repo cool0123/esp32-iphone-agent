@@ -206,9 +206,9 @@ import Foundation
             let n = Double(xs.count)
             guard n > 1 else { return nil }
             let mx = xs.reduce(0, +) / n, my = ys.reduce(0, +) / n
-            let sxx = zip(xs, xs).map { ($0 - mx) * ($0 - mx) }.reduce(0, +)
+            let sxx = xs.map { (x: Double) in (x - mx) * (x - mx) }.reduce(0, +)
             guard sxx > 0 else { return nil }
-            return zip(xs, ys).map { ($0 - mx) * ($1 - my) }.reduce(0, +) / sxx
+            return zip(xs, ys).map { (x: Double, y: Double) in (x - mx) * (y - my) }.reduce(0, +) / sxx
         }
         let askedX = asked.map { $0.0 }, askedY = asked.map { $0.1 }
         let foundX = found.map { $0.0 }, foundY = found.map { $0.1 }
