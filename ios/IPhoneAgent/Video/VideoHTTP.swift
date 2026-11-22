@@ -22,6 +22,13 @@ struct VideoEndpoint {
 /// HTTP/network failure before any bytes were accepted; the current cursor remains retryable.
 struct VideoHTTPUnavailable: Error { let status: Int }
 
+/// The board's response could not be used (truncated body, unexpected shape). No bytes were consumed, so the
+/// same cursor can be retried; the decoder still holds its references and needs no new IDR.
+struct VideoChainCorrupt: Error {}
+
+/// The board moved to a different reference chain (config change or IDR): the cursor is genuinely gone.
+struct VideoCursorLost: Error {}
+
 struct VideoBatch {
     let units: [AccessUnit]
     let restarted: Bool
@@ -40,7 +47,7 @@ struct VideoCursor {
         func number(_ key: String) throws -> UInt64 {
             guard let s = response.value(forHTTPHeaderField: key), !s.isEmpty,
                   s.utf8.allSatisfy({ (48...57).contains($0) }), let n = UInt64(s) else {
-                throw DeviceError(message: "invalid video metadata")
+                throw VideoChainCorrupt()
             }
             return n
         }
@@ -51,10 +58,10 @@ struct VideoCursor {
         let config = try number("X-Gop-Config"), up = try number("X-Board-Ms"), stamp = try number("X-Frame-Ms")
         guard gen <= UInt32.max, up <= UInt32.max, stamp <= UInt32.max, start <= end,
               end - start <= 4 * 1024 * 1024, config <= 512,
-              UInt64(data.count) == end - start + config else { throw DeviceError(message: "incomplete video response") }
+              UInt64(data.count) == end - start + config else { throw VideoChainCorrupt() }
         let restarted = config > 0
         guard restarted || (generation == UInt32(gen) && offset == start) else {
-            throw DeviceError(message: "video cursor lost continuity")
+            throw VideoCursorLost()
         }
         var units: [AccessUnit] = []
         var picture = Data(), idr = false
@@ -62,7 +69,7 @@ struct VideoCursor {
         if restarted {
             let cfg = Data(data.prefix(Int(config)))
             let types = annexBUnits(cfg).compactMap { $0.first.map { $0 & 31 } }
-            guard types.contains(7), types.contains(8) else { throw DeviceError(message: "video prefix has no SPS/PPS") }
+            guard types.contains(7), types.contains(8) else { throw VideoChainCorrupt() }
             units.append(.init(data: cfg, idr: false, config: true, snap: true, boardMs: UInt32(stamp)))
         }
         func flush() {
@@ -75,23 +82,23 @@ struct VideoCursor {
             guard let first = nal.first else { continue }
             let type = first & 31
             if type == 1 || type == 5 {
-                guard nal.count > 1 else { throw DeviceError(message: "truncated video slice") }
+                guard nal.count > 1 else { throw VideoChainCorrupt() }
                 // Exp-Golomb first_mb_in_slice == 0 starts with 1; later slices retain this AU.
                 if nal[nal.startIndex + 1] & 0x80 != 0 { flush() }
-                else if picture.isEmpty { throw DeviceError(message: "video starts in the middle of a picture") }
+                else if picture.isEmpty { throw VideoChainCorrupt() }
                 idr = idr || type == 5
                 picture.append(code); picture.append(nal)
             } else if type == 9 { flush() }
             else if type == 7 || type == 8 {
-                throw DeviceError(message: "unexpected video configuration")
+                throw VideoChainCorrupt()
             }  // SEI/filler do not carry reference pictures
         }
         flush()
         guard data.count == Int(config) || units.contains(where: { !$0.config }) else {
-            throw DeviceError(message: "video response has no pictures")
+            throw VideoChainCorrupt()
         }
         if restarted {
-            guard units.first(where: { !$0.config })?.idr == true else { throw DeviceError(message: "video prefix has no IDR") }
+            guard units.first(where: { !$0.config })?.idr == true else { throw VideoChainCorrupt() }
         }
         // Commit only once the entire response is consistent.
         generation = UInt32(gen); offset = end

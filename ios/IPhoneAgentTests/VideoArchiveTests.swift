@@ -55,6 +55,30 @@ final class VideoArchiveTests: XCTestCase {
         XCTAssertGreaterThan(now() - feed.capturedAt, 658)
     }
 
+    func testCursorMistakesAreClassified() throws {
+        let key = Data([0,0,0,1,0x65,0x80,1]), pframe = Data([0,0,0,1,0x41,0x80,2])
+        func response(_ fields: [String: String]) throws -> HTTPURLResponse {
+            try XCTUnwrap(HTTPURLResponse(url: URL(string: host)!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                          headerFields: fields))
+        }
+        var cursor = VideoCursor()
+        let first = try response(["X-Monitor-Protocol":"3", "X-Gop-Gen":"4", "X-Gop-Start":"0",
+                                  "X-Gop-Bytes":"7", "X-Gop-Config":"0", "X-Board-Ms":"1000", "X-Frame-Ms":"900"])
+        _ = try cursor.accept(key, response: first)  // consumes 7 bytes at gen 4
+        // Same cursor, but the body does not match its headers: retryable, the decoder keeps its references.
+        let short = try response(["X-Monitor-Protocol":"3", "X-Gop-Gen":"4", "X-Gop-Start":"7",
+                                  "X-Gop-Bytes":"30", "X-Gop-Config":"0", "X-Board-Ms":"1100", "X-Frame-Ms":"1000"])
+        XCTAssertThrowsError(try cursor.accept(pframe, response: short)) { error in
+            XCTAssertTrue(error is VideoChainCorrupt, "\(error)")
+        }
+        // A different generation is a real discontinuity and needs a fresh decodable start.
+        let other = try response(["X-Monitor-Protocol":"3", "X-Gop-Gen":"5", "X-Gop-Start":"7",
+                                 "X-Gop-Bytes":"14", "X-Gop-Config":"0", "X-Board-Ms":"1200", "X-Frame-Ms":"1100"])
+        XCTAssertThrowsError(try cursor.accept(pframe, response: other)) { error in
+            XCTAssertTrue(error is VideoCursorLost, "\(error)")
+        }
+    }
+
     func testPartialTailReusesOnlyCommittedRecordsAndFutureAppendTruncatesTail() async throws {
         let url = file(), archive = VideoArchive(file: url)
         await archive.append(record(cfg + key), restarted: true)

@@ -379,13 +379,15 @@ extension ScreenSource {
                 } catch {
                     if Task.isCancelled || self.wifiGeneration != generation || !device.connected || device.links != link { return }
                     failures += 1
-                    let invalidChain = !(error is URLError || error is VideoHTTPUnavailable || error is MonitorRenewalFailed)
-                    // A rejected cursor is definitive; a corrupt or truncated body is not. Keep the exact
-                    // offset so a retry can resume the board's P-only history instead of needing a new IDR.
-                    let cursorRejected = (error as? VideoHTTPUnavailable).map { (400...499).contains($0.status) } ?? false
-                    chainFailures = invalidChain ? chainFailures + 1 : 0
-                    self.videoNetworkFailed(invalidChain: invalidChain && chainFailures >= 3)
-                    if cursorRejected || chainFailures >= 3 {
+                    // Only a proven discontinuity costs the decoder its references. A truncated or unusable body,
+                    // a timeout or a 503 leaves the cursor and the reference pictures intact, and the next attempt
+                    // continues from the same byte offset - that is what keeps a long session alive without iOS
+                    // ever sending another IDR.
+                    let lost = error is VideoCursorLost
+                    let rejected = (error as? VideoHTTPUnavailable).map { (400...499).contains($0.status) } ?? false
+                    if lost || rejected { chainFailures = 3 } else if error is VideoChainCorrupt { chainFailures += 1 }
+                    self.videoNetworkFailed(invalidChain: lost || rejected)
+                    if lost || rejected {
                         cursor = VideoCursor(); saved = nil; chainFailures = 0
                     }
                     if failures == 1 {
@@ -394,6 +396,7 @@ extension ScreenSource {
                         if let urlError = error as? URLError { failure = "URL error \(urlError.code.rawValue)" }
                         else if let unavailable = error as? VideoHTTPUnavailable { failure = "HTTP \(unavailable.status)" }
                         else if error is MonitorRenewalFailed { failure = "monitor renewal failed" }
+                        else if error is VideoChainCorrupt { failure = "unusable video body; retrying the same cursor" }
                         else { failure = "invalid video chain" }
                         DebugLog.write("Wi-Fi video interrupted (\(failure)); input remains blocked until fresh decoding")
                     }
