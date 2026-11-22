@@ -191,7 +191,11 @@ extension ScreenSource {
             if mirroring && !broken {
                 if allowUnchanged && live { return "live (unchanged)" }
                 if frame != nil && capturedAt > 0 && now() - capturedAt < maxAge && live { return "live" }
-                await wakePausedEncoder()  // a static screen pauses the iOS encoder; dirty it before waiting
+                // A static screen pauses the iOS encoder. Wiggle it, then use the frame captured after the
+                // wiggle went quiet: frames arriving during the model call would invalidate its decision.
+                if await wakePausedEncoder(), frame != nil, capturedAt > 0, now() - capturedAt < 2, live {
+                    return "live (woke)"
+                }
                 if await fresh(since: now() - maxAge, timeout: wait) != nil, live { return "live (waited)" }
             }
             throw BlindError(reason: "live screen has not caught up to the present; operation cancelled")
@@ -211,12 +215,21 @@ extension ScreenSource {
     /// iOS stops sending mirror video after a few seconds of a static screen, and the board then reports AirPlay
     /// as connected rather than streaming; waiting for a frame that never comes looks like a dead screen. A small
     /// pointer wiggle — out and back, so the net position is unchanged — gives the encoder something to send.
-    private func wakePausedEncoder() async {
-        guard let device, device.connected else { return }
+    /// Returns once the encoder has gone quiet again, so the decision frame stays the latest one while the model
+    /// thinks; a frame that arrives mid-decision makes the agent discard its own decision and loop.
+    private func wakePausedEncoder() async -> Bool {
+        guard let device, device.connected else { return false }
         try? await device.send("move 8 0")
         try? await Task.sleep(nanoseconds: 40_000_000)
         try? await device.send("move -8 0")
-        try? await Task.sleep(nanoseconds: 120_000_000)
+        var previous = capturedAt
+        let deadline = now() + 2.0
+        while now() < deadline {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if capturedAt == previous { return true }
+            previous = capturedAt
+        }
+        return true
     }
 
     /// Ask the board for the current GOP and wait until it is decoded. Returns the latency in ms.
