@@ -95,6 +95,9 @@ extension Pointer: Gestures {}
     /// Tap targets that changed nothing (typically the AssistiveTouch floating button, which sits over the tab
     /// bar). Remembered as screen fractions so later taps land beside them instead of being swallowed again.
     private var deadTaps: [CGPoint] = []
+    /// Consecutive actions that left the screen unchanged. Three in a row means the agent is stuck on one screen
+    /// and must change strategy instead of trying another variation of the same idea.
+    private var noChangeStreak = 0
     /// When the last gesture ended: the model never decides on a frame from before it.
     private(set) var lastActed = 0.0
     /// Awaited before every look and every gesture (the app holds the run while its own UI is in front).
@@ -346,6 +349,14 @@ extension Pointer: Gestures {}
             return try await discard("screen or connection changed; decision discarded")
         }
         discards = 0
+        if noChangeStreak >= 3, name != "done", name != "fail" {
+            record(planned.shot, ["action": .str("replan (stuck)"),
+                                  "reason": .str("three actions in a row changed nothing")])
+            noChangeStreak = 0
+            if !hints.contains(AgentLoop.stuckScreenHint) { hints.append(AgentLoop.stuckScreenHint) }
+            try await replan(stuck: true)
+            return false
+        }
         let stuck = repeating(act, limit: 2)
         if name == "replan" || stuck {
             record(planned.shot, act)
@@ -382,6 +393,7 @@ extension Pointer: Gestures {}
         if screen.live, screen.capturedAt > lastActed {
             let changed = Vision.changed(seen, screen.frame, ignore: spots)
             steps[steps.count - 1]["changed"] = .bool(changed)
+            noChangeStreak = changed ? 0 : noChangeStreak + 1
             if name == "tap" || name == "click", let target = tapPoint(step) {
                 if changed { deadTaps.removeAll() } else { rememberDeadTap(target) }
             }
@@ -439,6 +451,11 @@ extension Pointer: Gestures {}
         return moves.count == limit - 1 && moves.allSatisfy { Actions.sameMove($0, act) }
             && moves.last?["changed"] != .bool(true)
     }
+
+    /// Added to the actor prompt once several different actions left the screen unchanged.
+    static let stuckScreenHint = "Several actions in a row changed nothing on this screen. Do not try another "
+        + "variation of them: either pick a clearly different control, or, if the screen already shows the "
+        + "requested result, reply done."
 
     /// Added to the actor prompt after the same ineffective action is proposed again.
     static let repeatHint = "An action that changed nothing must not be repeated. Some elements (such as the "
