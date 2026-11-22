@@ -367,6 +367,12 @@ extension Pointer: Gestures {}
             try await replan(stuck: true)
             return false
         }
+        if steps.count == maxSteps * 3 / 5, !hints.contains(AgentLoop.budgetHint) {
+            hints.append(AgentLoop.budgetHint)  // re-plan with the observations before the budget runs out
+            record(planned.shot, ["action": .str("replan (budget)"), "reason": .str("sixty percent of the steps used")])
+            try await replan(stuck: true)
+            return false
+        }
         let stuck = repeating(act, limit: 2)
         if name == "replan" || stuck {
             record(planned.shot, act)
@@ -404,6 +410,7 @@ extension Pointer: Gestures {}
             let changed = Vision.changed(seen, screen.frame, ignore: spots)
             steps[steps.count - 1]["changed"] = .bool(changed)
             noChangeStreak = changed ? 0 : noChangeStreak + 1
+            if name == "tap" || name == "click" { (phone as? Pointer)?.needsProbe = !changed }
             rememberScreen(screen.frame)
             if name == "tap" || name == "click", let target = tapPoint(step) {
                 if changed { deadTaps.removeAll() } else { rememberDeadTap(target) }
@@ -476,6 +483,10 @@ extension Pointer: Gestures {}
         screens.append(print)
         if screens.count > 6 { screens.removeFirst() }
     }
+
+    /// Added once most of the step budget is used: summarise what was observed instead of guessing again.
+    static let budgetHint = "Most of the step budget is used. Re-read the screen and use what you already "
+        + "observed; if the requested result is already visible, reply done."
 
     /// Added when the agent oscillates between two screens instead of making progress.
     static let cycleHint = "The screen keeps returning to a state you already saw, so the last actions undo each "

@@ -160,15 +160,13 @@ import Foundation
         try await moveTo(dx(x), dy(y))
         // Finding the pointer costs a nudge, a fresh frame and a settle on every tap. Calibration is stable, so
         // measure every third tap (and always the first) and let the other taps use the calibrated point.
-        if aim, screen != nil, shouldProbe() { try await self.aim(x, y) }
+        if aim, screen != nil, needsProbe { try await self.aim(x, y) }
     }
 
-    private var tapsSinceProbe = 0
-
-    private func shouldProbe() -> Bool {
-        tapsSinceProbe += 1
-        return tapsSinceProbe % 3 == 1
-    }
+    /// The operator of a closed loop: re-measure the pointer only after a tap that changed nothing, plus the very
+    /// first tap of a run. Calibration does not drift on its own, and every probe costs a nudge, a frame and a
+    /// settle, so measuring on every tap is pure latency.
+    var needsProbe = true
 
     /// Closed loop: find the real pointer on screen, fix a miss, and learn the error for later moves.
     ///
