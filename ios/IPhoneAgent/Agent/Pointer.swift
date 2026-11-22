@@ -193,30 +193,48 @@ import Foundation
     @discardableResult
     func selfCalibrate() async throws -> Span? {
         guard let nominal = span, screen != nil else { return nil }
-        var samples: [(asked: CGPoint, found: CGPoint)] = []
-        for at in [CGPoint(x: 0.3, y: 0.3), CGPoint(x: 0.7, y: 0.7)] {
-            try await moveTo(dx(at.x), dy(at.y))
-            if let found = try await measure(at.x, at.y, model: false) { samples.append((at, found)) }
+        // Two points are too few: the frame that reports where the pointer landed can arrive before it stops, and a
+        // single noisy sample moved the horizontal span by 18% on this device. Take three stops per axis and fit.
+        var asked: [(Double, Double)] = []
+        var found: [(Double, Double)] = []
+        for at in [0.25, 0.5, 0.75] {
+            try await moveTo(dx(at), dy(at))
+            if let f = try await measure(at, at, model: false) { asked.append((at, at)); found.append((Double(f.x), Double(f.y))) }
         }
-        guard samples.count == 2 else { return nil }
-        let sx = (samples[1].found.x - samples[0].found.x) / (samples[1].asked.x - samples[0].asked.x)
-        let sy = (samples[1].found.y - samples[0].found.y) / (samples[1].asked.y - samples[0].asked.y)
-        // Only trust a measurement that is in the right ballpark; a wild fit would be worse than the constant.
-        guard (0.4...1.6).contains(sx), (0.4...1.6).contains(sy) else {
+        guard asked.count >= 2 else { return nil }
+        func slope(_ xs: [Double], _ ys: [Double]) -> Double? {
+            let n = Double(xs.count)
+            guard n > 1 else { return nil }
+            let mx = xs.reduce(0, +) / n, my = ys.reduce(0, +) / n
+            let sxx = zip(xs, xs).map { ($0 - mx) * ($0 - mx) }.reduce(0, +)
+            guard sxx > 0 else { return nil }
+            return zip(xs, ys).map { ($0 - mx) * ($1 - my) }.reduce(0, +) / sxx
+        }
+        let askedX = asked.map { $0.0 }, askedY = asked.map { $0.1 }
+        let foundX = found.map { $0.0 }, foundY = found.map { $0.1 }
+        guard let sx = slope(askedX, foundX), let sy = slope(askedY, foundY) else { return nil }
+        // Trust only a sane fit that stays close to the current span; a wild one is worse than what we have.
+        guard (0.7...1.4).contains(sx), (0.7...1.4).contains(sy) else {
             log(String(format: "self-calibration rejected: slopes %.3f / %.3f", sx, sy))
             return nil
         }
-        let solved = Span(w: Int((Double(nominal.w) / sx).rounded()), h: Int((Double(nominal.h) / sy).rounded()))
+        let w = Double(nominal.w) / sx, h = Double(nominal.h) / sy
+        guard abs(w / Double(nominal.w) - 1) <= 0.15, abs(h / Double(nominal.h) - 1) <= 0.15 else {
+            log(String(format: "self-calibration rejected: span %.0fx%.0f is too far from %dx%d", w, h, nominal.w, nominal.h))
+            return nil
+        }
+        let solved = Span(w: Int(w.rounded()), h: Int(h.rounded()))
         span = solved
         seen = ["x": [], "y": []]
-        for s in samples {
-            remember("x", (s.asked.x, s.found.x))
-            remember("y", (s.asked.y, s.found.y))
+        for (a, f) in zip(asked, found) {
+            remember("x", (a.0, f.0))
+            remember("y", (a.1, f.1))
         }
-        quality = min(abs(sx - 1), abs(sy - 1))
+        quality = max(abs(sx - 1), abs(sy - 1))
         aspect = screenAspect()
         save()
-        log("self-calibration: span \(nominal.w)x\(nominal.h) -> \(solved.w)x\(solved.h)")
+        log(String(format: "self-calibration: span %dx%d -> %dx%d (slopes %.3f / %.3f)",
+                   nominal.w, nominal.h, solved.w, solved.h, sx, sy))
         return solved
     }
 
