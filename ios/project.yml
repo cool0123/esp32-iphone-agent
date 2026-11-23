@@ -40,12 +40,13 @@ targets:
       path: Legacy/Info.plist
       properties:
         CFBundleDisplayName: ESP32 Agent 15
-        CFBundleShortVersionString: "1.0.50"
-        CFBundleVersion: "50"
+        CFBundleShortVersionString: "1.0.51"
+        CFBundleVersion: "51"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: 接收开发板的视频并连接局域网运维服务。
         NSBluetoothAlwaysUsageDescription: 连接开发板以接收屏幕画面并操作手机。
+        NSCameraUsageDescription: 使用扩展坞上的 USB 摄像头直接拍摄手机屏幕，作为操作时的画面来源。
         UIBackgroundModes: [bluetooth-central]
         UIFileSharingEnabled: true
         UILaunchScreen: {}

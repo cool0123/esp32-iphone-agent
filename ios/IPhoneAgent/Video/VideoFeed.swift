@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import UIKit
 
@@ -67,6 +68,16 @@ extension ScreenSource {
     var mirroring = false  // board status says ap == streaming
     var metrics: Metrics?
     weak var device: HIDDevice?
+    /// A USB (UVC) camera on the phone's dock watching the screen. It replaces the AirPlay stream: the phone never
+    /// has to hand out a keyframe, so a dropped chain cannot wedge a run, and the camera keeps working across app
+    /// restarts, reboots and every app being operated.
+    private(set) var cameraActive = false
+    private(set) var cameraDeviceName = ""
+    private var cameraSession: AVCaptureSession?
+    private let cameraQueue = DispatchQueue(label: "camera.frames")
+    /// The phone screen inside the camera image, normalized (x, y, w, h from the top-left, fractions).
+    var cameraCrop = CGRect(x: 0, y: 0, width: 1, height: 1)
+    private var lastCameraPublish = 0.0
 
     private var assembler = VideoAssembler()
     private let decoder = H264Decoder()
@@ -105,7 +116,9 @@ extension ScreenSource {
     }
 
     var live: Bool {
-        networkReady && mirroring && frame != nil && !broken && capturedAt > 0 && now() - capturedAt < 3 && (device?.connected ?? false)
+        if cameraActive { return frame != nil && capturedAt > 0 && now() - capturedAt < 3 }
+        return networkReady && mirroring && frame != nil && !broken && capturedAt > 0 && now() - capturedAt < 3
+            && (device?.connected ?? false)
     }
 
     /// Frame width / height (portrait iPhone as a fallback).
@@ -187,6 +200,11 @@ extension ScreenSource {
     /// Snapshots are used only when continuous streaming is off.
     @discardableResult
     func currentFrame(maxAge: Double = 1, wait: Double = 3, allowUnchanged: Bool = false) async throws -> String {
+        if cameraActive {
+            if frame != nil, capturedAt > 0, now() - capturedAt < maxAge { return "camera" }
+            if await fresh(since: now() - maxAge, timeout: wait) != nil { return "camera (waited)" }
+            throw BlindError(reason: "camera frame is stale")
+        }
         if streamOn {
             if mirroring && !broken {
                 if allowUnchanged && live { return "live (unchanged)" }
@@ -462,6 +480,12 @@ extension ScreenSource {
     /// own; absence of a newer frame does not prove the screen is unchanged and must not queue a GOP replay.
     /// In explicit snap mode, give the UI time to update, then fetch its GOP.
     func afterAction(since: Double) async {
+        if cameraActive {
+            // The camera keeps delivering frames; a short settle is enough to show the gesture's effect.
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            _ = try? await currentFrame()
+            return
+        }
         do {
             if FrameMode.current == .snap {
                 try await Task.sleep(nanoseconds: 700_000_000)
@@ -493,4 +517,94 @@ extension ScreenSource {
 
     /// The link dropped: the board forgets `stream on`.
     func linkLost() { streamOn = false; resetStream() }
+}
+
+
+// MARK: - External USB camera
+
+extension VideoFeed {
+    /// Start the dock camera. Frames are cropped to `cameraCrop` so the model's fractions match the phone screen.
+    func startCamera() async throws {
+        if cameraActive { return }
+        if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            guard granted else { throw DeviceError(message: "camera permission denied") }
+        }
+        let devices = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.externalUnknown], mediaType: .video, position: .unspecified).devices
+        guard let camera = devices.first else { throw DeviceError(message: "no external USB camera found") }
+        let session = AVCaptureSession()
+        session.sessionPreset = .high
+        let input = try AVCaptureDeviceInput(device: camera)
+        guard session.canAddInput(input) else { throw DeviceError(message: "camera input rejected") }
+        session.addInput(input)
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.alwaysDiscardsLateVideoFrames = true
+        output.setSampleBufferDelegate(self, queue: cameraQueue)
+        guard session.canAddOutput(output) else { throw DeviceError(message: "camera output rejected") }
+        session.addOutput(output)
+        if let connection = output.connection(with: .video), connection.isVideoOrientationSupported {
+            connection.videoOrientation = .portrait
+        }
+        session.startRunning()
+        cameraSession = session
+        cameraActive = true
+        cameraDeviceName = camera.localizedName
+        mirroring = true
+        broken = false
+        waitingForIDR = false
+        note = ""
+    }
+
+    func stopCamera() {
+        cameraSession?.stopRunning()
+        cameraSession = nil
+        cameraActive = false
+        cameraDeviceName = ""
+        lastCameraPublish = 0
+        frame = nil; updated = 0; capturedAt = 0
+    }
+
+    /// Encode one camera buffer to JPEG (cropped), throttled to the agent's cadence, on the main actor.
+    fileprivate func publishCamera(_ image: CGImage) {
+        let stamp = now()
+        guard stamp - lastCameraPublish >= 0.12 else { return }  // ~8 fps is plenty for the agent
+        lastCameraPublish = stamp
+        let width = CGFloat(image.width), height = CGFloat(image.height)
+        let rect = cameraCrop
+        let cropped: CGImage
+        if rect.minX <= 0.001 && rect.minY <= 0.001 && rect.width >= 0.999 && rect.height >= 0.999 {
+            cropped = image
+        } else {
+            let r = CGRect(x: rect.minX * width, y: rect.minY * height,
+                           width: max(1, rect.width * width), height: max(1, rect.height * height)).integral
+            cropped = image.cropping(to: r) ?? image
+        }
+        guard let jpeg = UIImage(cgImage: cropped).jpegData(compressionQuality: 0.65) else { return }
+        frame = jpeg
+        updated = now()
+        capturedAt = updated
+        broken = false
+        note = ""
+        let size = CGSize(width: cropped.width, height: cropped.height)
+        if self.size != size { self.size = size }
+    }
+}
+
+extension VideoFeed: AVCaptureVideoDataOutputSampleBufferDelegate {
+    nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
+                                   from connection: AVCaptureConnection) {
+        guard let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let ci = CIImage(cvPixelBuffer: pixel)
+        guard let image = VideoFeed.cameraContext.createCGImage(ci, from: ci.extent) else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.cameraActive else { return }
+            self.publishCamera(image)
+        }
+    }
+}
+
+extension VideoFeed {
+    fileprivate static let cameraContext = CIContext(options: [.useSoftwareRenderer: false])
 }

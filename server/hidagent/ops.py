@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 
 ALLOWED_CONFIG = {
     "baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody", "agentName", "frameMode",
-    "captureSize",
+    "captureSize", "cameraCrop",
 }
 
 
@@ -89,6 +89,15 @@ def valid_config(patch: dict[str, str]) -> dict[str, str]:
             width, height = int(parts[0]), int(parts[1])
             if not 160 <= width <= 1920 or not 160 <= height <= 2560:
                 raise ValueError("captureSize is out of range")
+        elif key == "cameraCrop":
+            try:
+                parts = [float(x) for x in value.split(",")]
+            except ValueError as e:
+                raise ValueError("cameraCrop must be x,y,w,h fractions") from e
+            if len(parts) != 4 or not all(0 <= v <= 1 for v in parts):
+                raise ValueError("cameraCrop must be x,y,w,h fractions")
+            if parts[2] <= 0.05 or parts[3] <= 0.05 or parts[0] + parts[2] > 1.001 or parts[1] + parts[3] > 1.001:
+                raise ValueError("cameraCrop is out of range")
         elif key == "tokenParam" and (not value or len(value) > 40):
             raise ValueError("invalid tokenParam")
         elif key == "extraBody":
@@ -378,6 +387,14 @@ def create_app(
         x1, y1, x2, y2 = coords
         return await result_data(hub, "cal.swipe",
                                  {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "hold": body.get("hold") is True})
+
+    @app.post("/api/camera", dependencies=[Depends(admin), Depends(local_tasks)])
+    async def camera(body: dict):
+        """Start or stop the dock camera that replaces the mirrored screen as the agent's eye."""
+        on = body.get("on", True)
+        if not isinstance(on, bool):
+            raise HTTPException(400, "on must be a boolean")
+        return await result_data(hub, "camera", {"on": on})
 
     @app.post("/api/pointer/span", dependencies=[Depends(admin), Depends(local_tasks)])
     async def pointer_span(body: dict):

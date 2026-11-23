@@ -128,7 +128,7 @@ extension AppModel: OpsApp {
 /// Remote-management config whitelist. Model credentials and the management token are never included.
 @MainActor enum OpsConfig {
     static let keys: Set<String> = ["baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody",
-                                    "agentName", "frameMode", "captureSize"]
+                                    "agentName", "frameMode", "captureSize", "cameraCrop"]
 
     static func get(_ app: any OpsApp) -> [String: Any] { get(app.settings, frameMode: FrameMode.current) }
 
@@ -165,6 +165,11 @@ extension AppModel: OpsApp {
                 guard let size = Self.captureSize(value) else {
                     throw DeviceError(message: "captureSize must be WIDTHxHEIGHT between 160 and 1920/2560")
                 }
+            case "cameraCrop":
+                guard let crop = Self.cameraCrop(value) else {
+                    throw DeviceError(message: "cameraCrop must be x,y,w,h fractions of the camera image")
+                }
+                _ = crop
             case "tokenParam":
                 guard !value.isEmpty, value.count <= 40 else { throw DeviceError(message: "invalid tokenParam") }
             case "extraBody":
@@ -180,6 +185,14 @@ extension AppModel: OpsApp {
             patch[key] = value
         }
         return patch
+    }
+
+    /// "x,y,w,h" fractions of the camera image that contain the phone screen.
+    static func cameraCrop(_ value: String) -> CGRect? {
+        let parts = value.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count == 4, parts.allSatisfy({ (0...1).contains($0) }), parts[2] > 0.05, parts[3] > 0.05,
+              parts[0] + parts[2] <= 1.001, parts[1] + parts[3] <= 1.001 else { return nil }
+        return CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
     }
 
     /// "WIDTHxHEIGHT" for the mirrored capture, bounded like the firmware's own `res` command.
@@ -203,6 +216,9 @@ extension AppModel: OpsApp {
         if let v = patch["frameMode"] { app.setFrameMode(FrameMode(rawValue: v) ?? .stream) }
         if let v = patch["captureSize"], let size = Self.captureSize(v) {
             try await app.setCaptureSize(width: size.0, height: size.1)
+        }
+        if let v = patch["cameraCrop"], let crop = Self.cameraCrop(v) {
+            app.feed.cameraCrop = crop
         }
         app.say("remote config updated: " + patch.keys.sorted().joined(separator: ", "))
         return get(app)
@@ -429,7 +445,11 @@ extension AppModel: OpsApp {
                     "running": app.agent.running, "task": app.agent.task, "steps": app.agent.steps.count,
                     "recovering": app.opsRecovering, "needsHelp": app.opsNeedsHelp,
                     "frameLive": app.feed.live, "decoderNote": app.feed.note, "videoTransport": app.feed.transport,
-                    "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? ""]]
+                    "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? "",
+                    "camera": ["on": app.feed.cameraActive, "device": app.feed.cameraDeviceName,
+                               "crop": String(format: "%.3f,%.3f,%.3f,%.3f", app.feed.cameraCrop.minX,
+                                              app.feed.cameraCrop.minY, app.feed.cameraCrop.width,
+                                              app.feed.cameraCrop.height)]]]
         if let pointer = (app as? any OpsPointerState)?.pointerState {
             payload["pointer"] = pointer
         }
@@ -491,6 +511,13 @@ extension AppModel: OpsApp {
                 guard app.feed.live, let jpeg = app.feed.frame else { throw DeviceError(message: "no fresh screenshot available") }
                 data = ["jpeg": jpeg.base64EncodedString(), "capturedAt": app.feed.capturedAt, "live": app.feed.live]
             case "model.check": data = ["result": try await checkModel()]
+            case "camera":
+                let on = params["on"] as? Bool ?? true
+                if on { try await app.feed.startCamera() } else { app.feed.stopCamera() }
+                data = ["on": app.feed.cameraActive, "device": app.feed.cameraDeviceName,
+                        "width": Int(app.feed.size.width), "height": Int(app.feed.size.height),
+                        "crop": String(format: "%.3f,%.3f,%.3f,%.3f", app.feed.cameraCrop.minX,
+                                       app.feed.cameraCrop.minY, app.feed.cameraCrop.width, app.feed.cameraCrop.height)]
             case "cal.swipe":
                 guard let params = message["params"] as? [String: Any],
                       let x1 = params["x1"] as? Int, let y1 = params["y1"] as? Int,
