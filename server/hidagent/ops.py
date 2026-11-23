@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 
 ALLOWED_CONFIG = {
     "baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody", "agentName", "frameMode",
-    "captureSize", "cameraCrop",
+    "captureSize", "cameraCrop", "cameraURL",
 }
 
 
@@ -89,6 +89,10 @@ def valid_config(patch: dict[str, str]) -> dict[str, str]:
             width, height = int(parts[0]), int(parts[1])
             if not 160 <= width <= 1920 or not 160 <= height <= 2560:
                 raise ValueError("captureSize is out of range")
+        elif key == "cameraURL" and value:
+            u = urlparse(value)
+            if u.scheme not in ("http", "https") or not u.hostname or u.username:
+                raise ValueError("cameraURL must be an HTTP(S) JPEG snapshot URL")
         elif key == "cameraCrop":
             try:
                 parts = [float(x) for x in value.split(",")]

@@ -128,7 +128,7 @@ extension AppModel: OpsApp {
 /// Remote-management config whitelist. Model credentials and the management token are never included.
 @MainActor enum OpsConfig {
     static let keys: Set<String> = ["baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody",
-                                    "agentName", "frameMode", "captureSize", "cameraCrop"]
+                                    "agentName", "frameMode", "captureSize", "cameraCrop", "cameraURL"]
 
     static func get(_ app: any OpsApp) -> [String: Any] { get(app.settings, frameMode: FrameMode.current) }
 
@@ -164,6 +164,13 @@ extension AppModel: OpsApp {
             case "captureSize":
                 guard let size = Self.captureSize(value) else {
                     throw DeviceError(message: "captureSize must be WIDTHxHEIGHT between 160 and 1920/2560")
+                }
+            case "cameraURL":
+                if !value.isEmpty {
+                    guard let url = URL(string: value), let host = url.host, !host.isEmpty,
+                          ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.user == nil else {
+                        throw DeviceError(message: "cameraURL must be an HTTP(S) JPEG snapshot URL")
+                    }
                 }
             case "cameraCrop":
                 guard let crop = Self.cameraCrop(value) else {
@@ -220,6 +227,7 @@ extension AppModel: OpsApp {
         if let v = patch["cameraCrop"], let crop = Self.cameraCrop(v) {
             app.feed.cameraCrop = crop
         }
+        if let v = patch["cameraURL"] { app.feed.cameraURL = v }
         app.say("remote config updated: " + patch.keys.sorted().joined(separator: ", "))
         return get(app)
     }
@@ -447,6 +455,7 @@ extension AppModel: OpsApp {
                     "frameLive": app.feed.live, "decoderNote": app.feed.note, "videoTransport": app.feed.transport,
                     "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? "",
                     "camera": ["on": app.feed.cameraActive, "device": app.feed.cameraDeviceName,
+                               "url": app.feed.cameraURL,
                                "crop": String(format: "%.3f,%.3f,%.3f,%.3f", app.feed.cameraCrop.minX,
                                               app.feed.cameraCrop.minY, app.feed.cameraCrop.width,
                                               app.feed.cameraCrop.height)]]]

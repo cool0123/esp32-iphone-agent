@@ -79,6 +79,10 @@ extension ScreenSource {
     var cameraCrop = CGRect(x: 0, y: 0, width: 1, height: 1)
     private var lastCameraPublish = 0.0
     private let cameraFrames = CameraFrames()
+    /// JPEG snapshot URL of a network camera (a small Linux board or Wi-Fi camera looking at the screen).
+    /// iOS never exposes a UVC camera on an iPhone, so a URL source is the way to use an external camera here.
+    var cameraURL = ""
+    private var cameraPoll: Task<Void, Never>?
 
     private var assembler = VideoAssembler()
     private let decoder = H264Decoder()
@@ -527,6 +531,10 @@ extension VideoFeed {
     /// Start the dock camera. Frames are cropped to `cameraCrop` so the model's fractions match the phone screen.
     func startCamera() async throws {
         if cameraActive { return }
+        if !cameraURL.isEmpty {
+            startNetworkCamera()
+            return
+        }
         if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
             let granted = await AVCaptureDevice.requestAccess(for: .video)
             guard granted else { throw DeviceError(message: "camera permission denied") }
@@ -565,12 +573,70 @@ extension VideoFeed {
     }
 
     func stopCamera() {
+        cameraPoll?.cancel(); cameraPoll = nil
         cameraSession?.stopRunning()
         cameraSession = nil
         cameraActive = false
         cameraDeviceName = ""
         lastCameraPublish = 0
         frame = nil; updated = 0; capturedAt = 0
+    }
+
+    /// Poll a JPEG snapshot URL ~7 times a second and publish it as the live screen (cropped).
+    private func startNetworkCamera() {
+        cameraActive = true
+        cameraDeviceName = cameraURL
+        mirroring = true
+        broken = false
+        waitingForIDR = false
+        note = ""
+        cameraPoll?.cancel()
+        cameraPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let url = self.cameraURL
+                if let parsed = URL(string: url) {
+                    var request = URLRequest(url: parsed)
+                    request.timeoutInterval = 5
+                    request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                    if let (data, response) = try? await URLSession.shared.data(for: request),
+                       let http = response as? HTTPURLResponse, http.statusCode == 200,
+                       data.count > 1000, data.first == 0xFF, data.dropFirst().first == 0xD8 {
+                        self.publishCameraJPEG(data)
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 140_000_000)
+            }
+        }
+    }
+
+    /// Crop a camera JPEG to the configured screen rectangle and publish it.
+    private func publishCameraJPEG(_ data: Data) {
+        guard cameraActive else { return }
+        let stamp = now()
+        guard stamp - lastCameraPublish >= 0.1 else { return }
+        lastCameraPublish = stamp
+        var jpeg = data
+        let image = UIImage(data: data)
+        if let cg = image?.cgImage {
+            let rect = cameraCrop
+            if rect.minX > 0.001 || rect.minY > 0.001 || rect.width < 0.999 || rect.height < 0.999 {
+                let w = CGFloat(cg.width), h = CGFloat(cg.height)
+                let r = CGRect(x: rect.minX * w, y: rect.minY * h,
+                               width: max(1, rect.width * w), height: max(1, rect.height * h)).integral
+                if let cropped = cg.cropping(to: r), let encoded = UIImage(cgImage: cropped).jpegData(compressionQuality: 0.65) {
+                    jpeg = encoded
+                }
+            }
+        }
+        frame = jpeg
+        updated = now()
+        capturedAt = updated
+        broken = false
+        note = ""
+        if let size = UIImage(data: jpeg)?.size, size.width > 0, size.height > 0, self.size != size {
+            self.size = size
+        }
     }
 
     /// Encode one camera buffer to JPEG (cropped), throttled to the agent's cadence, on the main actor.
