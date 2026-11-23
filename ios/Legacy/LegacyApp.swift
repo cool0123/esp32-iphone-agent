@@ -168,12 +168,29 @@ enum Mood: String, Codable, Hashable {
         say("镜像分辨率已设为 \(width)×\(height)。")
     }
 
+    func setBoardFPS(_ fps: Int) async throws {
+        guard board.connected else { throw DeviceError(message: "board not connected") }
+        _ = try await board.commands.send("fps \(fps)")
+        say("板子帧率上限已设为 \(fps) fps（新的镜像会话生效）。")
+    }
+
+    func wakeScreen() async throws {
+        guard board.connected else { throw DeviceError(message: "board not connected") }
+        _ = try await board.commands.send("homescreen")
+        say("已盲按 Home 键，尝试点亮屏幕。")
+    }
+
     func setFrameMode(_ mode: FrameMode) {
         FrameMode.current = mode
         Task { do { try await receiveMirror(mode == .stream) } catch { say(error.localizedDescription) } }
     }
     func receiveMirror(_ on: Bool = true) async throws {
         receiving = on
+        if on, Latency.boardFPS > 0, board.connected {
+            // Re-apply the operator's frame-rate choice on every new mirror session: the board keeps it in NVS,
+            // so this only matters when it was changed while the session was down.
+            _ = try? await board.commands.send("fps \(Latency.boardFPS)")
+        }
         try await feed.stream(on)
     }
     func stopAgent() async {

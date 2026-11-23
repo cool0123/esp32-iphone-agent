@@ -24,11 +24,23 @@ import UIKit
     func calibratePointer() async throws -> [String: Any]
     /// Pin the pointer span to an explicit value (operator A/B of candidate calibrations).
     func setPointerSpan(w: Int, h: Int) async throws -> [String: Any]
+    /// Board display refresh request, so a slow mirror can be sped up without a rebuild.
+    func setBoardFPS(_ fps: Int) async throws
+    /// Blind wake: press Home even without a live frame, so a stalled mirror can be recovered remotely.
+    func wakeScreen() async throws
 }
 
 extension OpsApp {
     func setCaptureSize(width: Int, height: Int) async throws {
         throw DeviceError(message: "capture size is not adjustable on this build")
+    }
+
+    func setBoardFPS(_ fps: Int) async throws {
+        throw DeviceError(message: "board frame rate is not adjustable on this build")
+    }
+
+    func wakeScreen() async throws {
+        throw DeviceError(message: "blind wake is not supported on this build")
     }
 
     func tapForCalibration(x: Int, y: Int) async throws {
@@ -128,7 +140,8 @@ extension AppModel: OpsApp {
 /// Remote-management config whitelist. Model credentials and the management token are never included.
 @MainActor enum OpsConfig {
     static let keys: Set<String> = ["baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody",
-                                    "agentName", "frameMode", "captureSize", "cameraCrop", "cameraURL"]
+                                    "agentName", "frameMode", "captureSize", "cameraCrop", "cameraURL",
+                                    "fps", "settleQuiet", "settleMost"]
 
     static func get(_ app: any OpsApp) -> [String: Any] { get(app.settings, frameMode: FrameMode.current) }
 
@@ -142,6 +155,8 @@ extension AppModel: OpsApp {
         ["baseURL": publicBaseURL(s.baseURL), "model": s.model, "plannerModel": s.plannerModel, "actorModel": s.actorModel,
          "tokenParam": s.tokenParam, "extraBody": s.extraBody, "agentName": s.agentName,
          "frameMode": frameMode.rawValue, "hasAPIKey": !s.apiKey.isEmpty,
+         "fps": String(Latency.boardFPS), "settleQuiet": String(format: "%.2f", Latency.settleQuiet),
+         "settleMost": String(format: "%.2f", Latency.settleMost),
          "configurationRevision": s.configurationRevision]
     }
 
@@ -171,6 +186,18 @@ extension AppModel: OpsApp {
                           ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.user == nil else {
                         throw DeviceError(message: "cameraURL must be an HTTP(S) JPEG snapshot URL")
                     }
+                }
+            case "fps":
+                guard let fps = Int(value), (1...60).contains(fps) else {
+                    throw DeviceError(message: "fps must be 1...60")
+                }
+            case "settleQuiet":
+                guard let v = Double(value), (0.05...1.0).contains(v) else {
+                    throw DeviceError(message: "settleQuiet must be 0.05...1.0 seconds")
+                }
+            case "settleMost":
+                guard let v = Double(value), (0.2...5.0).contains(v) else {
+                    throw DeviceError(message: "settleMost must be 0.2...5.0 seconds")
                 }
             case "cameraCrop":
                 guard let crop = Self.cameraCrop(value) else {
@@ -228,6 +255,12 @@ extension AppModel: OpsApp {
             app.feed.cameraCrop = crop
         }
         if let v = patch["cameraURL"] { app.feed.cameraURL = v }
+        if let v = patch["fps"], let fps = Int(v) {
+            Latency.boardFPS = fps
+            try await app.setBoardFPS(fps)
+        }
+        if let v = patch["settleQuiet"], let quiet = Double(v) { Latency.settleQuiet = quiet }
+        if let v = patch["settleMost"], let most = Double(v) { Latency.settleMost = most }
         app.say("remote config updated: " + patch.keys.sorted().joined(separator: ", "))
         return get(app)
     }
@@ -453,6 +486,8 @@ extension AppModel: OpsApp {
                     "running": app.agent.running, "task": app.agent.task, "steps": app.agent.steps.count,
                     "recovering": app.opsRecovering, "needsHelp": app.opsNeedsHelp,
                     "frameLive": app.feed.live, "decoderNote": app.feed.note, "videoTransport": app.feed.transport,
+                    "latency": ["fps": Latency.boardFPS, "settleQuiet": Latency.settleQuiet,
+                                "settleMost": Latency.settleMost],
                     "plan": app.agent.plan, "lastStep": app.agent.steps.last.map { PyJSON.dumps($0, ascii: false) } ?? "",
                     "camera": ["on": app.feed.cameraActive, "device": app.feed.cameraDeviceName,
                                "url": app.feed.cameraURL,
@@ -576,6 +611,13 @@ extension AppModel: OpsApp {
                 }
                 try await app.tapForCalibration(x: x, y: y)
                 data = ["tapped": ["x": x, "y": y]]
+            case "wake":
+                // Deliberately allowed without a live frame: a stalled mirror is exactly when the operator needs
+                // this. It only presses Home (a harmless consumer key), so nothing can be clicked by accident.
+                guard !app.agent.running else { throw DeviceError(message: "a task is running") }
+                guard app.board.connected else { throw DeviceError(message: "board not connected") }
+                try await app.wakeScreen()
+                data = ["woke": true]
             case "agent.stop":
                 await app.stopAgent()
                 data = ["stopped": true]

@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 
 ALLOWED_CONFIG = {
     "baseURL", "model", "plannerModel", "actorModel", "tokenParam", "extraBody", "agentName", "frameMode",
-    "captureSize", "cameraCrop", "cameraURL",
+    "captureSize", "cameraCrop", "cameraURL", "fps", "settleQuiet", "settleMost",
 }
 
 
@@ -102,6 +102,17 @@ def valid_config(patch: dict[str, str]) -> dict[str, str]:
                 raise ValueError("cameraCrop must be x,y,w,h fractions")
             if parts[2] <= 0.05 or parts[3] <= 0.05 or parts[0] + parts[2] > 1.001 or parts[1] + parts[3] > 1.001:
                 raise ValueError("cameraCrop is out of range")
+        elif key == "fps":
+            if not value.isdigit() or not 1 <= int(value) <= 60:
+                raise ValueError("fps must be 1...60")
+        elif key in ("settleQuiet", "settleMost"):
+            try:
+                seconds = float(value)
+            except ValueError as e:
+                raise ValueError(f"{key} must be a number of seconds") from e
+            low, high = (0.05, 1.0) if key == "settleQuiet" else (0.2, 5.0)
+            if not low <= seconds <= high:
+                raise ValueError(f"{key} must be {low}...{high} seconds")
         elif key == "tokenParam" and (not value or len(value) > 40):
             raise ValueError("invalid tokenParam")
         elif key == "extraBody":
@@ -373,6 +384,11 @@ def create_app(
     def local_tasks():
         if not tasks_enabled:
             raise HTTPException(404, "remote tasks are disabled")
+
+    @app.post("/api/wake", dependencies=[Depends(admin), Depends(local_tasks)])
+    async def wake():
+        """Blind Home press: the only way to recover a stalled mirror without touching the phone."""
+        return await result_data(hub, "wake")
 
     @app.post("/api/tap", dependencies=[Depends(admin), Depends(local_tasks)])
     async def tap(point: dict):

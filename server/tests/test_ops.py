@@ -167,6 +167,34 @@ def test_capture_size_is_validated_server_side():
             valid_config({"captureSize": bad})
 
 
+def test_latency_config_is_validated_server_side():
+    assert valid_config({"fps": "8", "settleQuiet": "0.2", "settleMost": "1.2"}) == {
+        "fps": "8", "settleQuiet": "0.2", "settleMost": "1.2"}
+    for bad in ({"fps": "0"}, {"fps": "61"}, {"fps": "x"}, {"fps": "-1"},
+                {"settleQuiet": "0.01"}, {"settleQuiet": "2"}, {"settleMost": "0.1"}, {"settleMost": "9"}):
+        with pytest.raises(ValueError):
+            valid_config(bad)
+
+
+def test_wake_relays_a_blind_home_press():
+    with client(tasks_enabled=True) as c:
+        assert c.post("/api/wake", headers=ADMIN).status_code == 503  # no phone
+        assert c.post("/api/wake", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        with c.websocket_connect("/ws/device", headers=DEVICE) as ws:
+            ws.send_json({"type": "hello", "device": "test-phone"})
+
+            def press():
+                assert c.post("/api/wake", headers=ADMIN).status_code == 200
+
+            thread = threading.Thread(target=press)
+            thread.start()
+            command = ws.receive_json()
+            assert command["name"] == "wake"
+            ws.send_json({"type": "result", "id": command["id"], "ok": True, "data": {"woke": True}})
+            thread.join(timeout=3)
+            assert not thread.is_alive()
+
+
 def test_calibration_tap_validates_the_point():
     with client(tasks_enabled=True) as c:
         assert c.post("/api/tap", headers=ADMIN, json={"x": 500, "y": 960}).status_code == 503  # no phone

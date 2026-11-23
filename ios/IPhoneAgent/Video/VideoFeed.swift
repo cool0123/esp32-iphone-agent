@@ -26,15 +26,36 @@ enum FrameMode: String {
     }
 }
 
+/// Latency knobs the operator can tune remotely, so a slower screen does not cost whole seconds per step.
+enum Latency {
+    static let quietKey = "settleQuiet", mostKey = "settleMost", fpsKey = "boardFPS"
+    /// How long the screen must stay unchanged before a step counts as settled (default 0.35 s).
+    static var settleQuiet: Double {
+        get { UserDefaults.standard.object(forKey: quietKey) as? Double ?? 0.35 }
+        set { UserDefaults.standard.set(newValue, forKey: quietKey) }
+    }
+    /// Upper bound on that wait, so a busy screen still lets the run continue (default 3 s).
+    static var settleMost: Double {
+        get { UserDefaults.standard.object(forKey: mostKey) as? Double ?? 3 }
+        set { UserDefaults.standard.set(newValue, forKey: mostKey) }
+    }
+    /// Board display refresh request; 0 leaves the board's own setting alone.
+    static var boardFPS: Int {
+        get { UserDefaults.standard.object(forKey: fpsKey) as? Int ?? 0 }
+        set { UserDefaults.standard.set(newValue, forKey: fpsKey) }
+    }
+}
+
 extension ScreenSource {
     func afterAction(since: Double) async { await settled() }
 
     /// Wait until the screen stops changing (AirPlay only sends frames on change). Mid-animation frames are big and
     /// can reach us late over BLE, so a gap is only "quiet" once it also covers the last frame's transport lag.
     func settled(quiet: Double = 0.35, least: Double = 0.2, most: Double = 3) async {
+        let quietLimit = Latency.settleQuiet, mostLimit = Latency.settleMost
         let started = now()
         try? await Task.sleep(nanoseconds: UInt64(least * 1e9))
-        while !Task.isCancelled && now() - updated < quiet + lag && now() - started < most {
+        while !Task.isCancelled && now() - updated < quietLimit + lag && now() - started < mostLimit {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
