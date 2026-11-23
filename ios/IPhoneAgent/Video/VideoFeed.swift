@@ -78,6 +78,7 @@ extension ScreenSource {
     /// The phone screen inside the camera image, normalized (x, y, w, h from the top-left, fractions).
     var cameraCrop = CGRect(x: 0, y: 0, width: 1, height: 1)
     private var lastCameraPublish = 0.0
+    private let cameraFrames = CameraFrames()
 
     private var assembler = VideoAssembler()
     private let decoder = H264Decoder()
@@ -530,8 +531,11 @@ extension VideoFeed {
             let granted = await AVCaptureDevice.requestAccess(for: .video)
             guard granted else { throw DeviceError(message: "camera permission denied") }
         }
+        // The SDK renames the external device type on iOS 17 (externalUnknown -> external, same raw value),
+        // and the old name is unavailable when building with that SDK, so look it up by raw value.
+        let external = AVCaptureDevice.DeviceType(rawValue: "AVCaptureDeviceTypeExternalUnknown")
         let devices = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.externalUnknown], mediaType: .video, position: .unspecified).devices
+            deviceTypes: [external], mediaType: .video, position: .unspecified).devices
         guard let camera = devices.first else { throw DeviceError(message: "no external USB camera found") }
         let session = AVCaptureSession()
         session.sessionPreset = .high
@@ -541,7 +545,10 @@ extension VideoFeed {
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         output.alwaysDiscardsLateVideoFrames = true
-        output.setSampleBufferDelegate(self, queue: cameraQueue)
+        cameraFrames.onImage = { [weak self] image in
+            Task { @MainActor in self?.publishCamera(image) }
+        }
+        output.setSampleBufferDelegate(cameraFrames, queue: cameraQueue)
         guard session.canAddOutput(output) else { throw DeviceError(message: "camera output rejected") }
         session.addOutput(output)
         if let connection = output.connection(with: .video), connection.isVideoOrientationSupported {
@@ -592,19 +599,17 @@ extension VideoFeed {
     }
 }
 
-extension VideoFeed: AVCaptureVideoDataOutputSampleBufferDelegate {
-    nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
-                                   from connection: AVCaptureConnection) {
+/// Turns camera sample buffers into CGImages off the main thread. A plain NSObject because
+/// AVCaptureVideoDataOutputSampleBufferDelegate inherits NSObjectProtocol.
+final class CameraFrames: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    var onImage: ((CGImage) -> Void)?
+    private let context = CIContext(options: [.useSoftwareRenderer: false])
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
         guard let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ci = CIImage(cvPixelBuffer: pixel)
-        guard let image = VideoFeed.cameraContext.createCGImage(ci, from: ci.extent) else { return }
-        Task { @MainActor [weak self] in
-            guard let self, self.cameraActive else { return }
-            self.publishCamera(image)
-        }
+        guard let image = context.createCGImage(ci, from: ci.extent) else { return }
+        onImage?(image)
     }
-}
-
-extension VideoFeed {
-    fileprivate static let cameraContext = CIContext(options: [.useSoftwareRenderer: false])
 }
